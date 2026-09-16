@@ -120,7 +120,7 @@ local function teleportToCFrame(targetCFrame)
     end
 end
 
--- === AUTO RITUAL LOGIKA (SU PADIDINTAIS DELAY'AIS) ===
+-- === AUTO RITUAL LOGIKA (SUTVARKYTA LAIKO SEKA) ===
 local function startAutoRitual()
     ritualThread = task.spawn(function()
         while autoRitualActive do
@@ -131,16 +131,17 @@ local function startAutoRitual()
                 if hrp then
                     local targetCFrame = ritualPosition or hrp.CFrame
 
-                    -- 1. Laikinai sustabdomas Auto TP teleportacijai į ritualą
+                    -- 1. Pažymime, kad vyksta ritualo paleidimas (stebime Auto TP)
                     isTriggeringRitual = true
-                    
+                    isRitualOnCooldown = true
+
                     -- 2. Teleportas į ritualo vietą
                     hrp.CFrame = targetCFrame
                     
-                    -- ⏱️ DELAY 1: Laukimas po TP (kad spėtų užsikrauti zona ir pozicija)
-                    task.wait(1.5) -- Pakeisk šį skaičių, jei reikia ilgesnio laukimo po TP
+                    -- ⏱️ DELAY 1: Laukimas po TP, kad serveris užfiksuotų poziciją
+                    task.wait(1.5)
 
-                    -- 3. Paleidžiamas ritualas
+                    -- 3. Aktyvuojame ritualą per Remote
                     pcall(function()
                         mainRemote:FireServer("StartRitual")
                     end)
@@ -151,17 +152,18 @@ local function startAutoRitual()
                         Duration = 3
                     })
 
-                    -- ⏱️ DELAY 2: Laukimas po Remote išsiuntimo prieš vėl įjungiant Auto TP
-                    task.wait(1.0) -- Pakeisk šį skaičių, jei nori ilgiau palaukti po remote paspaudimo
+                    -- ⏱️ DELAY 2: Laukimas po Remote išsiuntimo
+                    task.wait(1.0)
 
-                    -- 4. Atsukame Auto TP!
+                    -- 4. Grąžiname Auto TP / Auto Trials valdymą
                     isTriggeringRitual = false
-                    isRitualOnCooldown = true
 
-                    -- 5. Cooldown skaičiavimas fone (2 min ritualas + 1 min cooldown = 180 s)
-                    task.delay(180, function()
-                        isRitualOnCooldown = false
-                    end)
+                    -- 5. PILNAS LAUKIMAS (2 min ritualas + 1 min cooldown = 180 s)
+                    -- Atimame 2.5 s, kuriuos jau praleidome per delay1 ir delay2, kad laikas būtų tikslus
+                    task.wait(177.5)
+
+                    -- 6. Nuimame cooldown flagą, kad kitas ciklų prasukimas vėl paleistų ritualą
+                    isRitualOnCooldown = false
                 end
             end
             task.wait(1)
