@@ -1,5 +1,5 @@
 local Games = {
-    [76911729991355] = "https://raw.githubusercontent.com/NeVoxxas/vxhub/refs/heads/main/vxhub.lua",
+    [76911729991355] = "https://raw.githubusercontent.com/NeVoxxas/vxhub/main/vxhub.lua",
 }
 
 local currentPlaceId = game.PlaceId
