@@ -172,7 +172,9 @@ local function startAutoRitual()
     end)
 end
 
--- === TRIALS LOGIKA (SUTVARKYTA: BE UŽSTRIGIMŲ IR SĄRAŠŲ) ===
+local RunService = game:GetService("RunService")
+
+-- === TRIALS LOGIKA (RENDERSTEPPED + POSITION CHECK) ===
 local function startAutoTrials()
     trialsThread = task.spawn(function()
         while autoTrialsActive do
@@ -187,17 +189,15 @@ local function startAutoTrials()
                     for _, descendant in ipairs(workspace:GetDescendants()) do
                         if descendant.Name == "Mobs" and descendant.Parent and descendant.Parent.Name:find("Trial") then
                             for _, mob in ipairs(descendant:GetChildren()) do
-                                -- Randame UI ir HP tekstą
                                 local ui = mob:FindFirstChild("OresTopUI") or mob:FindFirstChildOfClass("BillboardGui") or mob:FindFirstChild("TopUI", true)
                                 local bar = ui and ui:FindFirstChild("Bar", true)
                                 local lbl = bar and bar:FindFirstChild("Health", true) or (ui and ui:FindFirstChild("Health", true))
 
                                 local hpText = lbl and lbl.Text or ""
-
-                                -- Tikriname ar mobas tikrai gyvas IR nėra Respawn/0 HP būsenoje
                                 local isDead = hpText:find("Respawning") or hpText:find("^0/") or hpText == "0" or hpText == ""
                                 local isUiDisabled = ui and (ui:IsA("BillboardGui") or ui:IsA("SurfaceGui")) and not ui.Enabled
 
+                                -- Tikriname tik tikrai gyvus mobus
                                 if not isDead and not isUiDisabled then
                                     local mobPos = mob:IsA("BasePart") and mob.Position or mob:GetPivot().Position
                                     local dist = (hrp.Position - mobPos).Magnitude
@@ -213,11 +213,17 @@ local function startAutoTrials()
 
                     if closestMob then
                         local targetCFrame = closestMob:IsA("BasePart") and closestMob.CFrame or closestMob:GetPivot()
-                        teleportToCFrame(targetCFrame)
+                        local distToTarget = (hrp.Position - targetCFrame.Position).Magnitude
+
+                        -- Teleportuojame TIK JEI esame toliau nei 5 studai nuo mobo
+                        -- Tai neleidžia skriptui spamminti CFrame toje pačioje vietoje ir stabdyti žaidimo
+                        if distToTarget > 5 then
+                            teleportToCFrame(targetCFrame)
+                        end
                     end
                 end
             end
-            task.wait(0.05)
+            RunService.RenderStepped:Wait() -- Kiekviename kadre (0s lag)
         end
     end)
 end
