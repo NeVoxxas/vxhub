@@ -152,7 +152,7 @@ local function startAutoRitual()
                     isRitualOnCooldown = true
 
                     -- 4. Fone atskaičiuojame 4 min. (2 min. ritualas + 2 min. cooldown)
-                    task.delay(240, function()
+                    task.delay(180, function()
                         isRitualOnCooldown = false
                     end)
                 end
