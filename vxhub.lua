@@ -171,7 +171,7 @@ local function startAutoRitual()
     end)
 end
 
--- === AUTO TRIALS LOGIKA ===
+-- === OPTIMIZUOTA TRIALS LOGIKA (MOMENTINIS TP) ===
 local function startAutoTrials()
     trialsThread = task.spawn(function()
         while autoTrialsActive do
@@ -190,7 +190,10 @@ local function startAutoTrials()
                                 local bar = ui and ui:FindFirstChild("Bar", true)
                                 local lbl = bar and bar:FindFirstChild("Health", true) or (ui and ui:FindFirstChild("Health", true))
 
-                                if not (lbl and lbl.Text:find("Respawning")) then
+                                local hpText = lbl and lbl.Text or ""
+                                
+                                -- Tikriname ar mobas tikrai gyvas IR nėra Respawn/0 HP būsenoje
+                                if not (hpText:find("Respawning") or hpText:find("^0/") or hpText == "0") then
                                     local mobPos = mob:IsA("BasePart") and mob.Position or mob:GetPivot().Position
                                     local dist = (hrp.Position - mobPos).Magnitude
 
@@ -209,7 +212,7 @@ local function startAutoTrials()
                     end
                 end
             end
-            task.wait(0.2)
+            task.wait(0.05) -- Sumažinta nuo 0.2 iki 0.05 sek. greitesniam reagavimui
         end
     end)
 end
