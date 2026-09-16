@@ -15,7 +15,8 @@ local autoTrialsActive = false
 local autoRitualActive = false
 local autoRejoinActive = true
 
-local isTriggeringRitual = false -- Sustabdo Auto TP tik sekundei, kol aktyvuojamas ritualas
+local isTriggeringRitual = false
+local isRitualOnCooldown = false
 local depositInterval = 10
 local ritualPosition = nil
 
@@ -119,43 +120,44 @@ local function teleportToCFrame(targetCFrame)
     end
 end
 
--- === AUTO RITUAL LOGIKA (GREITAS AKTYVAVIMAS) ===
+-- === AUTO RITUAL LOGIKA (NEUŽBLOKUOJA AUTO TP) ===
 local function startAutoRitual()
     ritualThread = task.spawn(function()
         while autoRitualActive do
-            local character = localPlayer.Character
-            local hrp = character and character:FindFirstChild("HumanoidRootPart")
+            if not isRitualOnCooldown then
+                local character = localPlayer.Character
+                local hrp = character and character:FindFirstChild("HumanoidRootPart")
 
-            if hrp then
-                local targetCFrame = ritualPosition or hrp.CFrame
+                if hrp then
+                    local targetCFrame = ritualPosition or hrp.CFrame
 
-                -- 1. Laikinai pristabdomas Auto TP, kad veikėjas nebūtų nutemptas
-                isTriggeringRitual = true
+                    -- 1. Laikinai sustabdomas Auto TP teleportacijai į ritualą
+                    isTriggeringRitual = true
+                    hrp.CFrame = targetCFrame
+                    task.wait(0.4)
 
-                -- 2. Teleportas į ritualo vietą ir aktyvavimas
-                hrp.CFrame = targetCFrame
-                task.wait(0.3)
+                    -- 2. Paleidžiamas ritualas
+                    pcall(function()
+                        mainRemote:FireServer("StartRitual")
+                    end)
 
-                pcall(function()
-                    mainRemote:FireServer("StartRitual")
-                end)
+                    Rayfield:Notify({
+                        Title = "Ritualas Aktyvuotas!",
+                        Content = "StartRitual paleistas. Auto TP grąžintas!",
+                        Duration = 3
+                    })
 
-                task.wait(0.2)
+                    -- 3. IŠKART PO TRIGGERINIMO: Atsukame Auto TP!
+                    isTriggeringRitual = false
+                    isRitualOnCooldown = true
 
-                -- 3. IŠKART PO TRIGGERINIMO: Atsukame Auto TP atgal!
-                isTriggeringRitual = false
-
-                Rayfield:Notify({
-                    Title = "Ritualas Aktyvuotas",
-                    Content = "StartRitual išsiųstas! Auto TP atnaujintas.",
-                    Duration = 3
-                })
-
-                -- 4. Laukiame 2 min. ritualo trukmės + 2 min. cooldown (viso 240 s) do kito ritualo
-                task.wait(240)
-            else
-                task.wait(1)
+                    -- 4. Fone atskaičiuojame 4 min. (2 min. ritualas + 2 min. cooldown)
+                    task.delay(240, function()
+                        isRitualOnCooldown = false
+                    end)
+                end
             end
+            task.wait(1)
         end
     end)
 end
@@ -387,6 +389,7 @@ AutomationTab:CreateToggle({
            startAutoRitual()
        else
            isTriggeringRitual = false
+           isRitualOnCooldown = false
            if ritualThread then task.cancel(ritualThread) ritualThread = nil end
        end
    end,
@@ -457,6 +460,7 @@ SettingsTab:CreateButton({
        autoTrialsActive = false
        autoRitualActive = false
        isTriggeringRitual = false
+       isRitualOnCooldown = false
        if tpThread then task.cancel(tpThread) end
        if depositThread then task.cancel(depositThread) end
        if trialsThread then task.cancel(trialsThread) end
