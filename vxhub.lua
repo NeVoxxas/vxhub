@@ -19,7 +19,6 @@ local trialsThread = nil
 
 local mainRemote = ReplicatedStorage:WaitForChild("__Net"):WaitForChild("MainRemote")
 
--- === SUFFIX REIKŠMIŲ KONVERTAVIMAS Į SKAIČIUS ===
 local SUFFIXES = {
     k = 1e3, m = 1e6, b = 1e9, t = 1e12, qd = 1e15, qn = 1e18,
     sx = 1e21, sp = 1e24, oc = 1e27, no = 1e30, dc = 1e33
@@ -43,7 +42,6 @@ local function parseHP(hpText)
     return num
 end
 
--- === ATSKIRAS APLANKŲ SKENAVIMAS IR RŪŠIAVIMAS ===
 local function getSortedItemsFromFolder(folderName)
     local gameContent = workspace:FindFirstChild("__GAME_CONTENT")
     local folder = gameContent and gameContent:FindFirstChild(folderName)
@@ -100,17 +98,14 @@ local function isSelected(name, selectedList)
     return false
 end
 
--- Teleportacijos pagalbinė funkcija
 local function teleportToCFrame(targetCFrame)
     local character = localPlayer.Character
     local hrp = character and character:FindFirstChild("HumanoidRootPart")
     if hrp then
-        -- Teleportuojame 3 studus atgal nuo tikslo centro, kad neįstrigtų pačiame objekte
         hrp.CFrame = targetCFrame * CFrame.new(0, 0, 3)
     end
 end
 
--- === TELEPORT TRIALS LOGIKA ===
 local function startAutoTrials()
     trialsThread = task.spawn(function()
         while autoTrialsActive do
@@ -151,7 +146,6 @@ local function startAutoTrials()
     end)
 end
 
--- === AUTO DEPOSIT LOGIKA ===
 local function startAutoDeposit()
     depositThread = task.spawn(function()
         while autoDepositActive do
@@ -163,7 +157,6 @@ local function startAutoDeposit()
     end)
 end
 
--- === AUTO TELEPORT LOGIKA (ORES + MOBS) ===
 local function startAutoTeleport()
     tpThread = task.spawn(function()
         while autoTeleportActive do
@@ -232,7 +225,7 @@ end
 local Window = Rayfield:CreateWindow({
    Name = "VX Hub",
    Icon = 0,
-   LoadingTitle = "VX Hub Kraunasi...",
+   LoadingTitle = "VX Hub Loading...",
    LoadingSubtitle = "by Sirius Rayfield",
    Theme = "Default",
    DisableRayfieldPrompts = false,
@@ -249,10 +242,10 @@ local AutomationTab = Window:CreateTab("Automation", 4483362458)
 local SettingsTab = Window:CreateTab("Settings", 4483362458)
 
 -- === TAB 1: TELEPORT ===
-MainTab:CreateSection("⛏️ Ores (Rudos)")
+MainTab:CreateSection("⛏️ Ores ")
 
 local OreDropdown = MainTab:CreateDropdown({
-   Name = "Pasirinkite Rudas",
+   Name = "Choose ore",
    Options = availableOres,
    CurrentOption = {},
    MultipleOptions = true,
@@ -262,10 +255,10 @@ local OreDropdown = MainTab:CreateDropdown({
    end,
 })
 
-MainTab:CreateSection("⚔️ Mobs (Monstrai)")
+MainTab:CreateSection("⚔️ Mobs ")
 
 local MobDropdown = MainTab:CreateDropdown({
-   Name = "Pasirinkite Mobus",
+   Name = "Choose mobs",
    Options = availableMobs,
    CurrentOption = {},
    MultipleOptions = true,
@@ -295,7 +288,7 @@ MainTab:CreateToggle({
 })
 
 MainTab:CreateButton({
-   Name = "Atnaujinti Rudų ir Mobų Sąrašus",
+   Name = "Refresh Mobs/Ores",
    Callback = function()
        local updatedOres = getSortedItemsFromFolder("Ores")
        local updatedMobs = getSortedItemsFromFolder("Mobs")
@@ -304,15 +297,15 @@ MainTab:CreateButton({
        MobDropdown:Refresh(updatedMobs)
        
        Rayfield:Notify({
-          Title = "Sąrašas atnaujintas",
-          Content = "Rasta Rudų: " .. #updatedOres .. " | Mobų: " .. #updatedMobs,
+          Title = "List updated",
+          Content = "Found ores: " .. #updatedOres .. " | Mobs: " .. #updatedMobs,
           Duration = 3
        })
    end,
 })
 
 -- === TAB 2: TRIALS ===
-TrialsTab:CreateSection("🏆 Auto Trials (Teleport Cleaver)")
+TrialsTab:CreateSection("🏆 Auto Trials ")
 
 TrialsTab:CreateToggle({
    Name = "Auto TP To Wave Mobs",
@@ -335,7 +328,7 @@ TrialsTab:CreateToggle({
 AutomationTab:CreateSection("📦 Auto Deposit")
 
 AutomationTab:CreateSlider({
-   Name = "Deposit Timeout (Sekundėmis)",
+   Name = "Deposit Timeout",
    Range = {1, 60},
    Increment = 1,
    Suffix = "s",
@@ -364,10 +357,10 @@ AutomationTab:CreateToggle({
 })
 
 -- === TAB 4: SETTINGS ===
-SettingsTab:CreateSection("💾 Configuration (Nustatymai)")
+SettingsTab:CreateSection("💾 Configuration")
 
 SettingsTab:CreateButton({
-   Name = "Išsaugoti Nustatymus (Save Config)",
+   Name = "Save config (Save Config)",
    Callback = function()
        pcall(function()
            if Rayfield.Save then
@@ -378,14 +371,14 @@ SettingsTab:CreateButton({
        end)
        Rayfield:Notify({
           Title = "Config",
-          Content = "Nustatymai sėkmingai išsaugoti!",
+          Content = "Config saved!",
           Duration = 3
        })
    end,
 })
 
 SettingsTab:CreateButton({
-   Name = "Užkrauti Nustatymus (Load Config)",
+   Name = "Load Config",
    Callback = function()
        pcall(function()
            if Rayfield.Load then
@@ -396,13 +389,13 @@ SettingsTab:CreateButton({
        end)
        Rayfield:Notify({
           Title = "Config",
-          Content = "Nustatymai sėkmingai užkrauti!",
+          Content = "Config loaded!",
           Duration = 3
        })
    end,
 })
 
-SettingsTab:CreateSection("Sąsajos Valdymas")
+SettingsTab:CreateSection("Settings")
 
 SettingsTab:CreateButton({
    Name = "Unload UI",
