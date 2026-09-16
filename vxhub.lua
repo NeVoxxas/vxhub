@@ -120,7 +120,7 @@ local function teleportToCFrame(targetCFrame)
     end
 end
 
--- === AUTO RITUAL LOGIKA (NEUŽBLOKUOJA AUTO TP) ===
+-- === AUTO RITUAL LOGIKA (SU PADIDINTAIS DELAY'AIS) ===
 local function startAutoRitual()
     ritualThread = task.spawn(function()
         while autoRitualActive do
@@ -133,10 +133,14 @@ local function startAutoRitual()
 
                     -- 1. Laikinai sustabdomas Auto TP teleportacijai į ritualą
                     isTriggeringRitual = true
+                    
+                    -- 2. Teleportas į ritualo vietą
                     hrp.CFrame = targetCFrame
-                    task.wait(0.4)
+                    
+                    -- ⏱️ DELAY 1: Laukimas po TP (kad spėtų užsikrauti zona ir pozicija)
+                    task.wait(1.5) -- Pakeisk šį skaičių, jei reikia ilgesnio laukimo po TP
 
-                    -- 2. Paleidžiamas ritualas
+                    -- 3. Paleidžiamas ritualas
                     pcall(function()
                         mainRemote:FireServer("StartRitual")
                     end)
@@ -147,11 +151,14 @@ local function startAutoRitual()
                         Duration = 3
                     })
 
-                    -- 3. IŠKART PO TRIGGERINIMO: Atsukame Auto TP!
+                    -- ⏱️ DELAY 2: Laukimas po Remote išsiuntimo prieš vėl įjungiant Auto TP
+                    task.wait(1.0) -- Pakeisk šį skaičių, jei nori ilgiau palaukti po remote paspaudimo
+
+                    -- 4. Atsukame Auto TP!
                     isTriggeringRitual = false
                     isRitualOnCooldown = true
 
-                    -- 4. Fone atskaičiuojame 4 min. (2 min. ritualas + 2 min. cooldown)
+                    -- 5. Cooldown skaičiavimas fone (2 min ritualas + 1 min cooldown = 180 s)
                     task.delay(180, function()
                         isRitualOnCooldown = false
                     end)
