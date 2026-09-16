@@ -15,7 +15,7 @@ local autoTrialsActive = false
 local autoRitualActive = false
 local autoRejoinActive = true
 
-local isRitualRunning = false
+local isTriggeringRitual = false -- Sustabdo Auto TP tik sekundei, kol aktyvuojamas ritualas
 local depositInterval = 10
 local ritualPosition = nil
 
@@ -43,6 +43,7 @@ GuiService.ErrorMessageChanged:Connect(function()
     end
 end)
 
+-- === SUFFIX REIKŠMIŲ KONVERTAVIMAS ===
 local SUFFIXES = {
     k = 1e3, m = 1e6, b = 1e9, t = 1e12, qd = 1e15, qn = 1e18,
     sx = 1e21, sp = 1e24, oc = 1e27, no = 1e30, dc = 1e33
@@ -118,7 +119,7 @@ local function teleportToCFrame(targetCFrame)
     end
 end
 
--- === AUTO RITUAL LOGIKA ===
+-- === AUTO RITUAL LOGIKA (GREITAS AKTYVAVIMAS) ===
 local function startAutoRitual()
     ritualThread = task.spawn(function()
         while autoRitualActive do
@@ -128,30 +129,30 @@ local function startAutoRitual()
             if hrp then
                 local targetCFrame = ritualPosition or hrp.CFrame
 
-                isRitualRunning = true
+                -- 1. Laikinai pristabdomas Auto TP, kad veikėjas nebūtų nutemptas
+                isTriggeringRitual = true
 
+                -- 2. Teleportas į ritualo vietą ir aktyvavimas
                 hrp.CFrame = targetCFrame
-                task.wait(0.5)
+                task.wait(0.3)
 
                 pcall(function()
                     mainRemote:FireServer("StartRitual")
                 end)
 
+                task.wait(0.2)
+
+                -- 3. IŠKART PO TRIGGERINIMO: Atsukame Auto TP atgal!
+                isTriggeringRitual = false
+
                 Rayfield:Notify({
-                    Title = "Ritualas Pradėtas",
-                    Content = "Auto TP sustabdytas 2 min. Vyks ritualas!",
-                    Duration = 4
+                    Title = "Ritualas Aktyvuotas",
+                    Content = "StartRitual išsiųstas! Auto TP atnaujintas.",
+                    Duration = 3
                 })
 
-                task.wait(120)
-
-                isRitualRunning = false
-                Rayfield:Notify({
-                    Title = "Ritualas Baigtas",
-                    Content = "Auto TP atnaujintas. Cooldown: 2 min.",
-                    Duration = 4
-                })
-                task.wait(120)
+                -- 4. Laukiame 2 min. ritualo trukmės + 2 min. cooldown (viso 240 s) do kito ritualo
+                task.wait(240)
             else
                 task.wait(1)
             end
@@ -159,11 +160,11 @@ local function startAutoRitual()
     end)
 end
 
--- === AUTO TRIALS ===
+-- === AUTO TRIALS LOGIKA ===
 local function startAutoTrials()
     trialsThread = task.spawn(function()
         while autoTrialsActive do
-            if not isRitualRunning then
+            if not isTriggeringRitual then
                 local character = localPlayer.Character
                 local hrp = character and character:FindFirstChild("HumanoidRootPart")
 
@@ -218,7 +219,7 @@ end
 local function startAutoTeleport()
     tpThread = task.spawn(function()
         while autoTeleportActive do
-            if not isRitualRunning then
+            if not isTriggeringRitual then
                 local character = localPlayer.Character
                 local hrp = character and character:FindFirstChild("HumanoidRootPart")
 
@@ -377,7 +378,7 @@ AutomationTab:CreateButton({
 })
 
 AutomationTab:CreateToggle({
-   Name = "Auto Start Ritual (2m Active / 2m Cooldown)",
+   Name = "Auto Start Ritual (Loop Every 4m)",
    CurrentValue = false,
    Flag = "AutoRitualToggle",
    Callback = function(Value)
@@ -385,7 +386,7 @@ AutomationTab:CreateToggle({
        if autoRitualActive then
            startAutoRitual()
        else
-           isRitualRunning = false
+           isTriggeringRitual = false
            if ritualThread then task.cancel(ritualThread) ritualThread = nil end
        end
    end,
@@ -455,7 +456,7 @@ SettingsTab:CreateButton({
        autoDepositActive = false
        autoTrialsActive = false
        autoRitualActive = false
-       isRitualRunning = false
+       isTriggeringRitual = false
        if tpThread then task.cancel(tpThread) end
        if depositThread then task.cancel(depositThread) end
        if trialsThread then task.cancel(trialsThread) end
