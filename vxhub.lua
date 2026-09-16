@@ -5,6 +5,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TeleportService = game:GetService("TeleportService")
 local GuiService = game:GetService("GuiService")
 local VirtualUser = game:GetService("VirtualUser")
+local RunService = game:GetService("RunService")
 
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 local localPlayer = Players.LocalPlayer
@@ -172,9 +173,7 @@ local function startAutoRitual()
     end)
 end
 
-local RunService = game:GetService("RunService")
-
--- === TRIALS LOGIKA (RENDERSTEPPED + POSITION CHECK) ===
+-- === TRIALS LOGIKA (ATSTUMO IR BILLBOARD GUI SUTVARKYMAS) ===
 local function startAutoTrials()
     trialsThread = task.spawn(function()
         while autoTrialsActive do
@@ -183,47 +182,55 @@ local function startAutoTrials()
                 local hrp = character and character:FindFirstChild("HumanoidRootPart")
 
                 if hrp then
-                    local closestMob = nil
+                    local closestMobPart = nil
                     local shortestDistance = math.huge
 
                     for _, descendant in ipairs(workspace:GetDescendants()) do
                         if descendant.Name == "Mobs" and descendant.Parent and descendant.Parent.Name:find("Trial") then
                             for _, mob in ipairs(descendant:GetChildren()) do
-                                local ui = mob:FindFirstChild("OresTopUI") or mob:FindFirstChildOfClass("BillboardGui") or mob:FindFirstChild("TopUI", true)
-                                local bar = ui and ui:FindFirstChild("Bar", true)
-                                local lbl = bar and bar:FindFirstChild("Health", true) or (ui and ui:FindFirstChild("Health", true))
+                                local mobPart = mob:IsA("BasePart") and mob or mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChildOfClass("BasePart")
+                                
+                                if mobPart then
+                                    local dist = (hrp.Position - mobPart.Position).Magnitude
+                                    local isDead = false
 
-                                local hpText = lbl and lbl.Text or ""
-                                local isDead = hpText:find("Respawning") or hpText:find("^0/") or hpText == "0" or hpText == ""
-                                local isUiDisabled = ui and (ui:IsA("BillboardGui") or ui:IsA("SurfaceGui")) and not ui.Enabled
+                                    -- Tikriname UI TIK JEI esame pakankamai arti (nes toli UI net neatsiranda dėl MaxDistance)
+                                    if dist < 25 then
+                                        local ui = mob:FindFirstChild("OresTopUI") or mob:FindFirstChildOfClass("BillboardGui") or mob:FindFirstChild("TopUI", true)
+                                        local bar = ui and ui:FindFirstChild("Bar", true)
+                                        local lbl = bar and bar:FindFirstChild("Health", true) or (ui and ui:FindFirstChild("Health", true))
 
-                                -- Tikriname tik tikrai gyvus mobus
-                                if not isDead and not isUiDisabled then
-                                    local mobPos = mob:IsA("BasePart") and mob.Position or mob:GetPivot().Position
-                                    local dist = (hrp.Position - mobPos).Magnitude
+                                        if ui then
+                                            local hpText = lbl and lbl.Text or ""
+                                            if hpText:find("Respawning") or hpText:find("^0/") or hpText == "0" then
+                                                isDead = true
+                                            end
+                                        end
+                                    end
 
-                                    if dist < shortestDistance then
-                                        shortestDistance = dist
-                                        closestMob = mob
+                                    -- Jei mobas nėra miręs — įtraukiame į paiešką
+                                    if not isDead then
+                                        if dist < shortestDistance then
+                                            shortestDistance = dist
+                                            closestMobPart = mobPart
+                                        end
                                     end
                                 end
                             end
                         end
                     end
 
-                    if closestMob then
-                        local targetCFrame = closestMob:IsA("BasePart") and closestMob.CFrame or closestMob:GetPivot()
-                        local distToTarget = (hrp.Position - targetCFrame.Position).Magnitude
+                    if closestMobPart then
+                        local distToTarget = (hrp.Position - closestMobPart.Position).Magnitude
 
-                        -- Teleportuojame TIK JEI esame toliau nei 5 studai nuo mobo
-                        -- Tai neleidžia skriptui spamminti CFrame toje pačioje vietoje ir stabdyti žaidimo
-                        if distToTarget > 5 then
-                            teleportToCFrame(targetCFrame)
+                        -- Teleportuojamės prie artimiausio mobo, jei esame toliau nei 3 studai
+                        if distToTarget > 3 then
+                            teleportToCFrame(closestMobPart.CFrame)
                         end
                     end
                 end
             end
-            RunService.RenderStepped:Wait() -- Kiekviename kadre (0s lag)
+            RunService.RenderStepped:Wait()
         end
     end)
 end
