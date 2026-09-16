@@ -172,6 +172,7 @@ local function startAutoRitual()
     end)
 end
 
+-- === TRIALS LOGIKA (SUTVARKYTA: BE UŽSTRIGIMŲ IR SĄRAŠŲ) ===
 local function startAutoTrials()
     trialsThread = task.spawn(function()
         while autoTrialsActive do
@@ -182,29 +183,22 @@ local function startAutoTrials()
                 if hrp then
                     local closestMob = nil
                     local shortestDistance = math.huge
-                    local totalAliveInWave = 0
 
                     for _, descendant in ipairs(workspace:GetDescendants()) do
                         if descendant.Name == "Mobs" and descendant.Parent and descendant.Parent.Name:find("Trial") then
                             for _, mob in ipairs(descendant:GetChildren()) do
+                                -- Randame UI ir HP tekstą
                                 local ui = mob:FindFirstChild("OresTopUI") or mob:FindFirstChildOfClass("BillboardGui") or mob:FindFirstChild("TopUI", true)
                                 local bar = ui and ui:FindFirstChild("Bar", true)
                                 local lbl = bar and bar:FindFirstChild("Health", true) or (ui and ui:FindFirstChild("Health", true))
-                                
-                                -- 1. Tikriname Humanoid jei yra
-                                local humanoid = mob:FindFirstChildOfClass("Humanoid")
-                                local isHumanoidDead = humanoid and humanoid.Health <= 0
-                                
-                                -- 2. Tikriname UI matomumą ir tekstą
-                                local isUiHidden = ui and (ui:IsA("BillboardGui") or ui:IsA("SurfaceGui")) and not ui.Enabled
-                                local hpText = lbl and lbl.Text or ""
-                                local isTextDead = hpText:find("Respawning") or hpText:find("^0/") or hpText == "0"
 
-                                -- Jei mobas rodo bet kurį mirties požymį
-                                if isHumanoidDead or isUiHidden or isTextDead then
-                                    currentWaveDead[mob] = true
-                                elseif not currentWaveDead[mob] then
-                                    totalAliveInWave = totalAliveInWave + 1
+                                local hpText = lbl and lbl.Text or ""
+
+                                -- Tikriname ar mobas tikrai gyvas IR nėra Respawn/0 HP būsenoje
+                                local isDead = hpText:find("Respawning") or hpText:find("^0/") or hpText == "0" or hpText == ""
+                                local isUiDisabled = ui and (ui:IsA("BillboardGui") or ui:IsA("SurfaceGui")) and not ui.Enabled
+
+                                if not isDead and not isUiDisabled then
                                     local mobPos = mob:IsA("BasePart") and mob.Position or mob:GetPivot().Position
                                     local dist = (hrp.Position - mobPos).Magnitude
 
@@ -217,18 +211,13 @@ local function startAutoTrials()
                         end
                     end
 
-                    -- Jeigu visi bangoje esantys mobai nebegyvi – išvalome sąrašą kitai bangai!
-                    if totalAliveInWave == 0 then
-                        currentWaveDead = {}
-                    end
-
                     if closestMob then
                         local targetCFrame = closestMob:IsA("BasePart") and closestMob.CFrame or closestMob:GetPivot()
                         teleportToCFrame(targetCFrame)
                     end
                 end
             end
-            task.wait(0.01)
+            task.wait(0.05)
         end
     end)
 end
