@@ -92,11 +92,9 @@ local function startAutoRitual()
     end)
 end
 
--- === AUTO TRIALS LOGIKA (STRICT MOBS FOLDER TARGETING) ===
+-- === AUTO TRIALS LOGIKA (CIKLINIS TP BE UI IR BE PICKUP/WALLS) ===
 local function startAutoTrials()
     trialsThread = task.spawn(function()
-        local debugSent = false
-
         while autoTrialsActive do
             if not isTriggeringRitual then
                 local character = localPlayer.Character
@@ -105,40 +103,32 @@ local function startAutoTrials()
                 if hrp then
                     local mobList = {}
 
-                    -- Tiesiogiai ieškome TIK "Mobs" aplankų, esančių Trial kambariuose
+                    -- Surandame tikrus mobus tiesiogiai iš Mobs aplanko Trial kambariuose
                     for _, descendant in ipairs(workspace:GetDescendants()) do
                         if descendant.Name == "Mobs" and descendant.Parent and descendant.Parent.Name:find("Trial") then
                             for _, mob in ipairs(descendant:GetChildren()) do
-                                -- Užtikriname, kad tai yra žaidimo monstras (Modelis), o ne tiesioginis UI ar Spawn mygtukas
-                                if mob:IsA("Model") or mob:IsA("BasePart") then
-                                    local part = mob:IsA("BasePart") and mob or mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChildOfClass("BasePart")
-                                    
-                                    -- Ignoruojame patį žaidėją, jei jis netyčia įkristų į šį aplanką
-                                    if part and mob.Name ~= localPlayer.Name then
-                                        table.insert(mobList, part)
+                                -- Tikriname ar tai nėra įėjimas ar UI elementas
+                                local nameLower = mob.Name:lower()
+                                local isIgnored = nameLower:find("enter") or nameLower:find("pickup") or nameLower:find("portal") or nameLower:find("leave")
+
+                                if not isIgnored then
+                                    local mobPart = mob:IsA("BasePart") and mob or mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChildOfClass("BasePart")
+                                    if mobPart then
+                                        table.insert(mobList, mobPart)
                                     end
                                 end
                             end
                         end
                     end
 
-                    if not debugSent then
-                        debugSent = true
-                        Rayfield:Notify({
-                            Title = "Trials Strict Debug",
-                            Content = "Rasta mobų Mobs aplanke: " .. #mobList,
-                            Duration = 5
-                        })
-                    end
-
-                    -- Teleportas per atpažintus mobus
+                    -- Ciklas: Paeiliui teleportuojamės prie visų pozicijų (bypassina BillboardGui lagą)
                     if #mobList > 0 then
                         for _, mobPart in ipairs(mobList) do
                             if not autoTrialsActive or isTriggeringRitual then break end
 
                             if mobPart and mobPart.Parent then
-                                hrp.CFrame = mobPart.CFrame * CFrame.new(0, 0, 3)
-                                task.wait(0.15)
+                                teleportToCFrame(mobPart.CFrame)
+                                task.wait(0.15) -- Auto Attack laikas vienam mobui
                             end
                         end
                     else
