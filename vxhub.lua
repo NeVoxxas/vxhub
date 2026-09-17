@@ -160,7 +160,7 @@ local function startAutoRitual()
     end)
 end
 
--- === AUTO TRIALS LOGIKA (BE ATSTUMO RIBOJIMŲ) ===
+-- === AUTO TRIALS LOGIKA (TIKSLUS 0 HP TIKRINIMAS) ===
 local function startAutoTrials()
     task.spawn(function()
         while autoTrialsActive do
@@ -172,24 +172,52 @@ local function startAutoTrials()
                     local closestMobPart = nil
                     local shortestDistance = math.huge
 
-                    -- Naudojame tiesioginį ieškojimą tavo nustatytame kelio faile
                     local gameContent = workspace:FindFirstChild("__GAME_CONTENT")
                     local contents = gameContent and gameContent:FindFirstChild("Contents")
-                    local trialsFolder = contents and contents:FindFirstChild("WORLD - 3.Trials")
+                    
+                    if contents then
+                        for _, worldObj in ipairs(contents:GetChildren()) do
+                            local trialsFolder = worldObj:FindFirstChild("Trials")
+                            if trialsFolder then
+                                for _, room in ipairs(trialsFolder:GetChildren()) do
+                                    local mobsFolder = room:FindFirstChild("Mobs")
+                                    if mobsFolder then
+                                        for _, mob in ipairs(mobsFolder:GetChildren()) do
+                                            if mob.Name ~= localPlayer.Name then
+                                                -- 1. Nuskaitymas tiesiai iš OresTopUI.Bar.Health
+                                                local ui = mob:FindFirstChild("OresTopUI") or mob:FindFirstChildOfClass("BillboardGui") or mob:FindFirstChild("TopUI", true)
+                                                local bar = ui and ui:FindFirstChild("Bar", true)
+                                                local lbl = bar and bar:FindFirstChild("Health", true) or (ui and ui:FindFirstChild("Health", true))
+                                                
+                                                local isDead = false
 
-                    if trialsFolder then
-                        for _, room in ipairs(trialsFolder:GetChildren()) do
-                            local mobsFolder = room:FindFirstChild("Mobs")
-                            if mobsFolder then
-                                for _, mob in ipairs(mobsFolder:GetChildren()) do
-                                    if mob.Name ~= localPlayer.Name then
-                                        local part = mob:IsA("BasePart") and mob or mob.PrimaryPart or mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChildOfClass("BasePart")
-                                        
-                                        if part then
-                                            local dist = (hrp.Position - part.Position).Magnitude
-                                            if dist < shortestDistance then
-                                                shortestDistance = dist
-                                                closestMobPart = part
+                                                if lbl and lbl.Text then
+                                                    local currentHpStr = lbl.Text:split("/")[1]
+                                                    if currentHpStr then
+                                                        -- Pašaliname tarpus ir raides, paliekame tik skaičių
+                                                        local cleanHp = currentHpStr:gsub("%s+", ""):gsub("%a+", "")
+                                                        if cleanHp == "0" or lbl.Text:find("Respawning") then
+                                                            isDead = true
+                                                        end
+                                                    end
+                                                end
+
+                                                -- 2. Jei mobas gyvas (HP > 0)
+                                                if not isDead then
+                                                    local part = mob:IsA("BasePart") and mob 
+                                                        or mob.PrimaryPart 
+                                                        or mob:FindFirstChild("HumanoidRootPart") 
+                                                        or mob:FindFirstChild("Hitbox")
+                                                        or mob:FindFirstChildWhichIsA("BasePart", true)
+                                                    
+                                                    if part then
+                                                        local dist = (hrp.Position - part.Position).Magnitude
+                                                        if dist < shortestDistance then
+                                                            shortestDistance = dist
+                                                            closestMobPart = part
+                                                        end
+                                                    end
+                                                end
                                             end
                                         end
                                     end
@@ -198,11 +226,12 @@ local function startAutoTrials()
                         end
                     end
 
+                    -- 3. Teleportacija momentaliai po mirties
                     if closestMobPart then
                         hrp.CFrame = closestMobPart.CFrame * CFrame.new(0, 0, 3)
-                        task.wait(0.12)
+                        task.wait(0.04) -- Labai trumpa pauzė, kad iškart šoktų prie kito
                     else
-                        task.wait(0.3)
+                        task.wait(0.08)
                     end
                 else
                     task.wait(0.5)
@@ -210,7 +239,7 @@ local function startAutoTrials()
             else
                 task.wait(0.5)
             end
-            task.wait(0.02)
+            task.wait(0.01)
         end
     end)
 end
