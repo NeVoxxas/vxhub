@@ -92,7 +92,6 @@ local function startAutoRitual()
     end)
 end
 
--- === AUTO TRIALS LOGIKA (SU DEBUG NOTIFICATIONS) ===
 local function startAutoTrials()
     trialsThread = task.spawn(function()
         local debugSent = false
@@ -106,30 +105,36 @@ local function startAutoTrials()
                     local mobList = {}
                     local trialFolderCount = 0
 
-                    -- Ieškome visų Trial mobų
+                    -- Ieškome visų Trial kambarių
                     for _, descendant in ipairs(workspace:GetDescendants()) do
-                        if descendant.Name == "Mobs" and descendant.Parent and descendant.Parent.Name:find("Trial") then
+                        if descendant.Name:find("TrialRoom") or descendant.Name:find("Trial") then
                             trialFolderCount = trialFolderCount + 1
-                            for _, mob in ipairs(descendant:GetChildren()) do
-                                local part = mob:IsA("BasePart") and mob or mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChildOfClass("BasePart")
-                                if part and part.Parent then
-                                    table.insert(mobList, part)
+
+                            -- Tikriname visus objektus Trial kambario viduje
+                            for _, child in ipairs(descendant:GetDescendants()) do
+                                -- Jei objektas yra Modelis arba dalis ir tai nėra pats kambario rėmas/siena
+                                if (child:IsA("Model") or child:IsA("BasePart")) and not child.Name:find("Room") and not child.Name:find("Wall") and not child.Name:find("Floor") then
+                                    local part = child:IsA("BasePart") and child or child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildOfClass("BasePart")
+                                    
+                                    -- Įsitikiname, kad tai ne pats žaidėjas
+                                    if part and not child:FindFirstChildOfClass("Humanoid") or (child:FindFirstChildOfClass("Humanoid") and child.Name ~= localPlayer.Name) then
+                                        table.insert(mobList, part)
+                                    end
                                 end
                             end
                         end
                     end
 
-                    -- Vieną kartą parodome pranešimą apie radinius ekrane
                     if not debugSent then
                         debugSent = true
                         Rayfield:Notify({
                             Title = "Trials Debug Status",
-                            Content = "Rasta Trial Aplankų: " .. trialFolderCount .. " | Rasta Mobų: " .. #mobList,
+                            Content = "Rasta Kambarių: " .. trialFolderCount .. " | Rasta Mobų/Dalių: " .. #mobList,
                             Duration = 5
                         })
                     end
 
-                    -- Ciklas per rasto mobų sąrašo dalis
+                    -- Ciklinis TP per rastus mobus
                     if #mobList > 0 then
                         for _, mobPart in ipairs(mobList) do
                             if not autoTrialsActive or isTriggeringRitual then break end
