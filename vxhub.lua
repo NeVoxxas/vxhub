@@ -160,7 +160,7 @@ local function startAutoRitual()
     end)
 end
 
--- === AUTO TRIALS LOGIKA ===
+-- === AUTO TRIALS LOGIKA (BE ATSTUMO RIBOJIMŲ) ===
 local function startAutoTrials()
     task.spawn(function()
         while autoTrialsActive do
@@ -172,17 +172,25 @@ local function startAutoTrials()
                     local closestMobPart = nil
                     local shortestDistance = math.huge
 
-                    for _, descendant in ipairs(workspace:GetDescendants()) do
-                        if descendant.Name == "Mobs" and descendant.Parent and descendant.Parent.Name:find("Trial") then
-                            for _, mob in ipairs(descendant:GetChildren()) do
-                                if mob.Name ~= localPlayer.Name then
-                                    local part = mob:IsA("BasePart") and mob or mob.PrimaryPart or mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChildOfClass("BasePart")
-                                    
-                                    if part then
-                                        local dist = (hrp.Position - part.Position).Magnitude
-                                        if dist < shortestDistance and dist < 300 then
-                                            shortestDistance = dist
-                                            closestMobPart = part
+                    -- Naudojame tiesioginį ieškojimą tavo nustatytame kelio faile
+                    local gameContent = workspace:FindFirstChild("__GAME_CONTENT")
+                    local contents = gameContent and gameContent:FindFirstChild("Contents")
+                    local trialsFolder = contents and contents:FindFirstChild("WORLD - 3.Trials")
+
+                    if trialsFolder then
+                        for _, room in ipairs(trialsFolder:GetChildren()) do
+                            local mobsFolder = room:FindFirstChild("Mobs")
+                            if mobsFolder then
+                                for _, mob in ipairs(mobsFolder:GetChildren()) do
+                                    if mob.Name ~= localPlayer.Name then
+                                        local part = mob:IsA("BasePart") and mob or mob.PrimaryPart or mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChildOfClass("BasePart")
+                                        
+                                        if part then
+                                            local dist = (hrp.Position - part.Position).Magnitude
+                                            if dist < shortestDistance then
+                                                shortestDistance = dist
+                                                closestMobPart = part
+                                            end
                                         end
                                     end
                                 end
@@ -194,7 +202,7 @@ local function startAutoTrials()
                         hrp.CFrame = closestMobPart.CFrame * CFrame.new(0, 0, 3)
                         task.wait(0.12)
                     else
-                        task.wait(0.2)
+                        task.wait(0.3)
                     end
                 else
                     task.wait(0.5)
