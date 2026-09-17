@@ -173,62 +173,48 @@ local function startAutoRitual()
     end)
 end
 
--- === TRIALS LOGIKA (ATSTUMO IR BILLBOARD GUI SUTVARKYMAS) ===
+-- === TRIALS LOGIKA (CILKINIS PERĖJIMAS / CYCLE THROUGH MOBS) ===
 local function startAutoTrials()
     trialsThread = task.spawn(function()
-        local lastTarget = nil
-        local targetHitTime = 0
-
         while autoTrialsActive do
             if not isTriggeringRitual then
                 local character = localPlayer.Character
                 local hrp = character and character:FindFirstChild("HumanoidRootPart")
 
                 if hrp then
-                    local closestPart = nil
-                    local shortestDistance = math.huge
+                    local mobList = {}
 
+                    -- Surandame visus Trial mobus
                     for _, descendant in ipairs(workspace:GetDescendants()) do
                         if descendant.Name == "Mobs" and descendant.Parent and descendant.Parent.Name:find("Trial") then
                             for _, mob in ipairs(descendant:GetChildren()) do
-                                -- Ieškome bet kurios fizinės mobo dalies
-                                local part = mob:IsA("BasePart") and mob or mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChildOfClass("BasePart")
-                                
-                                if part and part.Parent then
-                                    -- Jei tai tas pats mobas, prie kurio jau buvome atsiteleportavę ilgiau nei 1.5s, praleidžiame ji (laikome mirusiu)
-                                    if not (lastTarget == mob and (os.clock() - targetHitTime) > 1.5) then
-                                        local dist = (hrp.Position - part.Position).Magnitude
-
-                                        if dist < shortestDistance then
-                                            shortestDistance = dist
-                                            closestPart = part
-                                        end
-                                    end
+                                local mobPart = mob:IsA("BasePart") and mob or mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChildOfClass("BasePart")
+                                if mobPart then
+                                    table.insert(mobList, mobPart)
                                 end
                             end
                         end
                     end
 
-                    if closestPart then
-                        local targetMob = closestPart.Parent
-                        
-                        -- Jei keičiasi tikslas, atnaujiname laiko žymą
-                        if lastTarget ~= targetMob then
-                            lastTarget = targetMob
-                            targetHitTime = os.clock()
-                        end
-
-                        local distToTarget = (hrp.Position - closestPart.Position).Magnitude
-                        if distToTarget > 3 then
-                            teleportToCFrame(closestPart.CFrame)
+                    -- Jei mobų yra, paeiliui teleportuojamės prie kiekvieno iš jų
+                    if #mobList > 0 then
+                        for _, mobPart in ipairs(mobList) do
+                            -- Tikriname ar žaidėjas neišjungė funkcijos arba neprasidėjo ritualas
+                            if not autoTrialsActive or isTriggeringRitual then break end
+                            
+                            if mobPart and mobPart.Parent then
+                                hrp.CFrame = mobPart.CFrame * CFrame.new(0, 0, 3)
+                                -- Laukimas tarp mobų (0.15s pakanka, kad Auto Attack atliktų smūgį)
+                                task.wait(0.15) 
+                            end
                         end
                     else
-                        -- Jei neberadome jokių mobų, išvalome paskutinį tikslą kitai bangai
-                        lastTarget = nil
+                        task.wait(0.2)
                     end
                 end
+            else
+                task.wait(0.5)
             end
-            RunService.RenderStepped:Wait()
         end
     end)
 end
