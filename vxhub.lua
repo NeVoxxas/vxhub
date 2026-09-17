@@ -20,6 +20,7 @@ local isTriggeringRitual = false
 local isRitualOnCooldown = false
 local depositInterval = 10
 local ritualPosition = nil
+local selectedTrialRoom = nil
 
 local selectedOres = {}
 local selectedMobs = {}
@@ -160,7 +161,7 @@ local function startAutoRitual()
     end)
 end
 
--- === AUTO TRIALS LOGIKA (TIKSLUS 0 HP TIKRINIMAS) ===
+-- === AUTO TRIALS LOGIKA (GRIEŽTAS PASIRINKTO KAMBARIO IR GYVŲ MOBŲ TIKRINIMAS) ===
 local function startAutoTrials()
     task.spawn(function()
         while autoTrialsActive do
@@ -168,7 +169,7 @@ local function startAutoTrials()
                 local character = localPlayer.Character
                 local hrp = character and character:FindFirstChild("HumanoidRootPart")
 
-                if hrp then
+                if hrp and selectedTrialRoom then
                     local closestMobPart = nil
                     local shortestDistance = math.huge
 
@@ -180,41 +181,43 @@ local function startAutoTrials()
                             local trialsFolder = worldObj:FindFirstChild("Trials")
                             if trialsFolder then
                                 for _, room in ipairs(trialsFolder:GetChildren()) do
-                                    local mobsFolder = room:FindFirstChild("Mobs")
-                                    if mobsFolder then
-                                        for _, mob in ipairs(mobsFolder:GetChildren()) do
-                                            if mob.Name ~= localPlayer.Name then
-                                                -- 1. Nuskaitymas tiesiai iš OresTopUI.Bar.Health
-                                                local ui = mob:FindFirstChild("OresTopUI") or mob:FindFirstChildOfClass("BillboardGui") or mob:FindFirstChild("TopUI", true)
-                                                local bar = ui and ui:FindFirstChild("Bar", true)
-                                                local lbl = bar and bar:FindFirstChild("Health", true) or (ui and ui:FindFirstChild("Health", true))
-                                                
-                                                local isDead = false
+                                    -- Tikriname tik žaidėjo pasirinktą kambarį
+                                    if room.Name == selectedTrialRoom then
+                                        local mobsFolder = room:FindFirstChild("Mobs")
+                                        if mobsFolder then
+                                            for _, mob in ipairs(mobsFolder:GetChildren()) do
+                                                if mob.Name ~= localPlayer.Name then
+                                                    -- Gyvybių (HP) tikrinimas
+                                                    local ui = mob:FindFirstChild("OresTopUI") or mob:FindFirstChildOfClass("BillboardGui") or mob:FindFirstChild("TopUI", true)
+                                                    local bar = ui and ui:FindFirstChild("Bar", true)
+                                                    local lbl = bar and bar:FindFirstChild("Health", true) or (ui and ui:FindFirstChild("Health", true))
+                                                    
+                                                    local isDead = false
 
-                                                if lbl and lbl.Text then
-                                                    local currentHpStr = lbl.Text:split("/")[1]
-                                                    if currentHpStr then
-                                                        -- Pašaliname tarpus ir raides, paliekame tik skaičių
-                                                        local cleanHp = currentHpStr:gsub("%s+", ""):gsub("%a+", "")
-                                                        if cleanHp == "0" or lbl.Text:find("Respawning") then
-                                                            isDead = true
+                                                    if lbl and lbl.Text then
+                                                        local currentHpStr = lbl.Text:split("/")[1]
+                                                        if currentHpStr then
+                                                            local cleanHp = currentHpStr:gsub("%s+", ""):gsub("%a+", "")
+                                                            if cleanHp == "0" or lbl.Text:find("Respawning") then
+                                                                isDead = true
+                                                            end
                                                         end
                                                     end
-                                                end
 
-                                                -- 2. Jei mobas gyvas (HP > 0)
-                                                if not isDead then
-                                                    local part = mob:IsA("BasePart") and mob 
-                                                        or mob.PrimaryPart 
-                                                        or mob:FindFirstChild("HumanoidRootPart") 
-                                                        or mob:FindFirstChild("Hitbox")
-                                                        or mob:FindFirstChildWhichIsA("BasePart", true)
-                                                    
-                                                    if part then
-                                                        local dist = (hrp.Position - part.Position).Magnitude
-                                                        if dist < shortestDistance then
-                                                            shortestDistance = dist
-                                                            closestMobPart = part
+                                                    -- Imame TIK gyvus mobus
+                                                    if not isDead then
+                                                        local part = mob:IsA("BasePart") and mob 
+                                                            or mob.PrimaryPart 
+                                                            or mob:FindFirstChild("HumanoidRootPart") 
+                                                            or mob:FindFirstChild("Hitbox")
+                                                            or mob:FindFirstChildWhichIsA("BasePart", true)
+                                                        
+                                                        if part then
+                                                            local dist = (hrp.Position - part.Position).Magnitude
+                                                            if dist < shortestDistance then
+                                                                shortestDistance = dist
+                                                                closestMobPart = part
+                                                            end
                                                         end
                                                     end
                                                 end
@@ -226,15 +229,14 @@ local function startAutoTrials()
                         end
                     end
 
-                    -- 3. Teleportacija momentaliai po mirties
                     if closestMobPart then
                         hrp.CFrame = closestMobPart.CFrame * CFrame.new(0, 0, 3)
-                        task.wait(0.04) -- Labai trumpa pauzė, kad iškart šoktų prie kito
+                        task.wait(0.04)
                     else
                         task.wait(0.08)
                     end
                 else
-                    task.wait(0.5)
+                    task.wait(0.3)
                 end
             else
                 task.wait(0.5)
@@ -391,6 +393,21 @@ MainTab:CreateButton({
 
 -- === TAB 2: TRIALS ===
 TrialsTab:CreateSection("🏆 Auto Trials (Teleport Cleaver)")
+
+TrialsTab:CreateDropdown({
+   Name = "Pasirinkite Trial Sunkumą",
+   Options = {"EasyTrialRoom", "MediumTrialRoom", "HardTrialRoom", "ExtremeTrialRoom"},
+   CurrentOption = {},
+   MultipleOptions = false,
+   Flag = "TrialRoomSelectFlag",
+   Callback = function(Option)
+       if type(Option) == "table" then
+           selectedTrialRoom = Option[1]
+       else
+           selectedTrialRoom = Option
+       end
+   end,
+})
 
 TrialsTab:CreateToggle({
    Name = "Auto TP To Wave Mobs",
