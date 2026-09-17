@@ -132,15 +132,12 @@ local function startAutoRitual()
                 if hrp then
                     local targetCFrame = ritualPosition or hrp.CFrame
 
-                    -- 1. Pažymime, kad aktyvuojamas ritualas (sustabdomas TP tik akimirkai)
                     isTriggeringRitual = true
                     isRitualOnCooldown = true
 
-                    -- 2. Teleportuojamės į ritualo vietą
                     hrp.CFrame = targetCFrame
-                    task.wait(1.5) -- Laukimas po TP
+                    task.wait(1.5)
 
-                    -- 3. Aktyvuojame remote
                     pcall(function()
                         mainRemote:FireServer("StartRitual")
                     end)
@@ -152,13 +149,10 @@ local function startAutoRitual()
                     })
 
                     task.wait(1.0)
-
-                    -- 4. IŠKART PO AKTYVAVIMO: grąžiname Auto TP / Trials veikimą!
                     isTriggeringRitual = false
 
-                    -- 5. Atskaičiuojame 180s (2 min ritualas + 1 min cooldown = 3 min viso)
+                    -- 180s (2m active + 1m cooldown)
                     task.wait(177.5)
-
                     isRitualOnCooldown = false
                 end
             end
@@ -167,7 +161,7 @@ local function startAutoRitual()
     end)
 end
 
--- === AUTO TRIALS LOGIKA (OPTIMIZUOTA BE UI DEPENDENCY) ===
+-- === AUTO TRIALS LOGIKA (CIKLINIS TP BE UI TIKRINIMO) ===
 local function startAutoTrials()
     trialsThread = task.spawn(function()
         while autoTrialsActive do
@@ -176,44 +170,39 @@ local function startAutoTrials()
                 local hrp = character and character:FindFirstChild("HumanoidRootPart")
 
                 if hrp then
-                    local closestPart = nil
-                    local shortestDistance = math.huge
+                    local mobList = {}
 
+                    -- Surenkame visus Trial mobų modelius
                     for _, descendant in ipairs(workspace:GetDescendants()) do
                         if descendant.Name == "Mobs" and descendant.Parent and descendant.Parent.Name:find("Trial") then
                             for _, mob in ipairs(descendant:GetChildren()) do
-                                local mobPart = mob:IsA("BasePart") and mob or mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChildOfClass("BasePart")
-                                
-                                if mobPart then
-                                    local ui = mob:FindFirstChild("OresTopUI") or mob:FindFirstChildOfClass("BillboardGui") or mob:FindFirstChild("TopUI", true)
-                                    local bar = ui and ui:FindFirstChild("Bar", true)
-                                    local lbl = bar and bar:FindFirstChild("Health", true) or (ui and ui:FindFirstChild("Health", true))
-                                    local hpText = lbl and lbl.Text or ""
-                                    
-                                    -- Tikriname mirtį TIK JEI UI egzistuoja ir rodo mirtį. Jei UI neegzistuoja (MaxDistance) - mobas gyvas!
-                                    local isDead = hpText:find("Respawning") or hpText:find("^0/") or hpText == "0"
-
-                                    if not isDead then
-                                        local dist = (hrp.Position - mobPart.Position).Magnitude
-                                        if dist < shortestDistance then
-                                            shortestDistance = dist
-                                            closestPart = mobPart
-                                        end
-                                    end
+                                local part = mob:IsA("BasePart") and mob or mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChildOfClass("BasePart")
+                                if part and part.Parent then
+                                    table.insert(mobList, part)
                                 end
                             end
                         end
                     end
 
-                    if closestPart then
-                        local distToTarget = (hrp.Position - closestPart.Position).Magnitude
-                        if distToTarget > 3 then
-                            teleportToCFrame(closestPart.CFrame)
+                    -- Paeiliui prabėgame per visų mobų pozicijas
+                    if #mobList > 0 then
+                        for _, mobPart in ipairs(mobList) do
+                            if not autoTrialsActive or isTriggeringRitual then break end
+
+                            if mobPart and mobPart.Parent then
+                                local targetCFrame = mobPart.CFrame
+                                teleportToCFrame(targetCFrame)
+                                task.wait(0.15) -- Delsimas tarp nusiteleportavimų prie mobų (gali sumažinti iki 0.1s)
+                            end
                         end
+                    else
+                        task.wait(0.2)
                     end
                 end
+            else
+                task.wait(0.5)
             end
-            RunService.RenderStepped:Wait()
+            task.wait(0.05)
         end
     end)
 end
@@ -373,8 +362,11 @@ TrialsTab:CreateToggle({
    Flag = "AutoTrialsToggle",
    Callback = function(Value)
        autoTrialsActive = Value
-       if autoTrialsActive then startAutoTrials()
-       else if trialsThread then task.cancel(trialsThread) trialsThread = nil end end
+       if autoTrialsActive then 
+           startAutoTrials()
+       else 
+           if trialsThread then task.cancel(trialsThread) trialsThread = nil end 
+       end
    end,
 })
 
