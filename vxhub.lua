@@ -176,43 +176,32 @@ end
 -- === TRIALS LOGIKA (ATSTUMO IR BILLBOARD GUI SUTVARKYMAS) ===
 local function startAutoTrials()
     trialsThread = task.spawn(function()
+        local lastTarget = nil
+        local targetHitTime = 0
+
         while autoTrialsActive do
             if not isTriggeringRitual then
                 local character = localPlayer.Character
                 local hrp = character and character:FindFirstChild("HumanoidRootPart")
 
                 if hrp then
-                    local closestMobPart = nil
+                    local closestPart = nil
                     local shortestDistance = math.huge
 
                     for _, descendant in ipairs(workspace:GetDescendants()) do
                         if descendant.Name == "Mobs" and descendant.Parent and descendant.Parent.Name:find("Trial") then
                             for _, mob in ipairs(descendant:GetChildren()) do
-                                local mobPart = mob:IsA("BasePart") and mob or mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChildOfClass("BasePart")
+                                -- Ieškome bet kurios fizinės mobo dalies
+                                local part = mob:IsA("BasePart") and mob or mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChildOfClass("BasePart")
                                 
-                                if mobPart then
-                                    local dist = (hrp.Position - mobPart.Position).Magnitude
-                                    local isDead = false
+                                if part and part.Parent then
+                                    -- Jei tai tas pats mobas, prie kurio jau buvome atsiteleportavę ilgiau nei 1.5s, praleidžiame ji (laikome mirusiu)
+                                    if not (lastTarget == mob and (os.clock() - targetHitTime) > 1.5) then
+                                        local dist = (hrp.Position - part.Position).Magnitude
 
-                                    -- Tikriname UI TIK JEI esame pakankamai arti (nes toli UI net neatsiranda dėl MaxDistance)
-                                    if dist < 25 then
-                                        local ui = mob:FindFirstChild("OresTopUI") or mob:FindFirstChildOfClass("BillboardGui") or mob:FindFirstChild("TopUI", true)
-                                        local bar = ui and ui:FindFirstChild("Bar", true)
-                                        local lbl = bar and bar:FindFirstChild("Health", true) or (ui and ui:FindFirstChild("Health", true))
-
-                                        if ui then
-                                            local hpText = lbl and lbl.Text or ""
-                                            if hpText:find("Respawning") or hpText:find("^0/") or hpText == "0" then
-                                                isDead = true
-                                            end
-                                        end
-                                    end
-
-                                    -- Jei mobas nėra miręs — įtraukiame į paiešką
-                                    if not isDead then
                                         if dist < shortestDistance then
                                             shortestDistance = dist
-                                            closestMobPart = mobPart
+                                            closestPart = part
                                         end
                                     end
                                 end
@@ -220,13 +209,22 @@ local function startAutoTrials()
                         end
                     end
 
-                    if closestMobPart then
-                        local distToTarget = (hrp.Position - closestMobPart.Position).Magnitude
-
-                        -- Teleportuojamės prie artimiausio mobo, jei esame toliau nei 3 studai
-                        if distToTarget > 3 then
-                            teleportToCFrame(closestMobPart.CFrame)
+                    if closestPart then
+                        local targetMob = closestPart.Parent
+                        
+                        -- Jei keičiasi tikslas, atnaujiname laiko žymą
+                        if lastTarget ~= targetMob then
+                            lastTarget = targetMob
+                            targetHitTime = os.clock()
                         end
+
+                        local distToTarget = (hrp.Position - closestPart.Position).Magnitude
+                        if distToTarget > 3 then
+                            teleportToCFrame(closestPart.CFrame)
+                        end
+                    else
+                        -- Jei neberadome jokių mobų, išvalome paskutinį tikslą kitai bangai
+                        lastTarget = nil
                     end
                 end
             end
