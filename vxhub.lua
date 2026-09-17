@@ -92,7 +92,7 @@ local function startAutoRitual()
     end)
 end
 
--- === AUTO TRIALS LOGIKA (CIKLINIS TP BE UI IR BE PICKUP/WALLS) ===
+-- === AUTO TRIALS LOGIKA (SURASTAS TIKSLUS KELIAS BE LAAGU) ===
 local function startAutoTrials()
     trialsThread = task.spawn(function()
         while autoTrialsActive do
@@ -103,32 +103,36 @@ local function startAutoTrials()
                 if hrp then
                     local mobList = {}
 
-                    -- Surandame tikrus mobus tiesiogiai iš Mobs aplanko Trial kambariuose
-                    for _, descendant in ipairs(workspace:GetDescendants()) do
-                        if descendant.Name == "Mobs" and descendant.Parent and descendant.Parent.Name:find("Trial") then
-                            for _, mob in ipairs(descendant:GetChildren()) do
-                                -- Tikriname ar tai nėra įėjimas ar UI elementas
-                                local nameLower = mob.Name:lower()
-                                local isIgnored = nameLower:find("enter") or nameLower:find("pickup") or nameLower:find("portal") or nameLower:find("leave")
+                    -- Tiesioginis kelias pagal tavo F9 nuotrauką!
+                    local gameContent = workspace:FindFirstChild("__GAME_CONTENT")
+                    local contents = gameContent and gameContent:FindFirstChild("Contents")
+                    local trialsFolder = contents and contents:FindFirstChild("WORLD - 3.Trials")
 
-                                if not isIgnored then
-                                    local mobPart = mob:IsA("BasePart") and mob or mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChildOfClass("BasePart")
-                                    if mobPart then
-                                        table.insert(mobList, mobPart)
+                    if trialsFolder then
+                        for _, room in ipairs(trialsFolder:GetChildren()) do
+                            local mobsFolder = room:FindFirstChild("Mobs")
+                            if mobsFolder then
+                                for _, mob in ipairs(mobsFolder:GetChildren()) do
+                                    -- Užtikriname, kad tai ne pats EasyTrialRoom įėjimas
+                                    if mob:IsA("Model") or mob:IsA("BasePart") then
+                                        local mobPart = mob:IsA("BasePart") and mob or mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChildOfClass("BasePart")
+                                        if mobPart then
+                                            table.insert(mobList, mobPart)
+                                        end
                                     end
                                 end
                             end
                         end
                     end
 
-                    -- Ciklas: Paeiliui teleportuojamės prie visų pozicijų (bypassina BillboardGui lagą)
+                    -- Fiksuotas ciklinis teleportavimas per visus bangos mobus
                     if #mobList > 0 then
                         for _, mobPart in ipairs(mobList) do
                             if not autoTrialsActive or isTriggeringRitual then break end
 
                             if mobPart and mobPart.Parent then
                                 teleportToCFrame(mobPart.CFrame)
-                                task.wait(0.15) -- Auto Attack laikas vienam mobui
+                                task.wait(0.12) -- Ciklo greitis pritaikytas tavo Auto Attack
                             end
                         end
                     else
