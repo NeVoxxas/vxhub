@@ -23,7 +23,6 @@ local ritualPosition = nil
 
 local selectedOres = {}
 local selectedMobs = {}
-local currentWaveDead = {}
 
 local tpThread = nil
 local depositThread = nil
@@ -122,7 +121,7 @@ local function teleportToCFrame(targetCFrame)
     end
 end
 
--- === AUTO RITUAL LOGIKA (SUTVARKYTA LAIKO SEKA) ===
+-- === AUTO RITUAL LOGIKA ===
 local function startAutoRitual()
     ritualThread = task.spawn(function()
         while autoRitualActive do
@@ -133,17 +132,15 @@ local function startAutoRitual()
                 if hrp then
                     local targetCFrame = ritualPosition or hrp.CFrame
 
-                    -- 1. Pažymime, kad vyksta ritualo paleidimas (stebime Auto TP)
+                    -- 1. Pažymime, kad aktyvuojamas ritualas (sustabdomas TP tik akimirkai)
                     isTriggeringRitual = true
                     isRitualOnCooldown = true
 
-                    -- 2. Teleportas į ritualo vietą
+                    -- 2. Teleportuojamės į ritualo vietą
                     hrp.CFrame = targetCFrame
-                    
-                    -- ⏱️ DELAY 1: Laukimas po TP, kad serveris užfiksuotų poziciją
-                    task.wait(1.5)
+                    task.wait(1.5) -- Laukimas po TP
 
-                    -- 3. Aktyvuojame ritualą per Remote
+                    -- 3. Aktyvuojame remote
                     pcall(function()
                         mainRemote:FireServer("StartRitual")
                     end)
@@ -154,17 +151,14 @@ local function startAutoRitual()
                         Duration = 3
                     })
 
-                    -- ⏱️ DELAY 2: Laukimas po Remote išsiuntimo
                     task.wait(1.0)
 
-                    -- 4. Grąžiname Auto TP / Auto Trials valdymą
+                    -- 4. IŠKART PO AKTYVAVIMO: grąžiname Auto TP / Trials veikimą!
                     isTriggeringRitual = false
 
-                    -- 5. PILNAS LAUKIMAS (2 min ritualas + 1 min cooldown = 180 s)
-                    -- Atimame 2.5 s, kuriuos jau praleidome per delay1 ir delay2, kad laikas būtų tikslus
+                    -- 5. Atskaičiuojame 180s (2 min ritualas + 1 min cooldown = 3 min viso)
                     task.wait(177.5)
 
-                    -- 6. Nuimame cooldown flagą, kad kitas ciklų prasukimas vėl paleistų ritualą
                     isRitualOnCooldown = false
                 end
             end
@@ -173,7 +167,7 @@ local function startAutoRitual()
     end)
 end
 
--- === TRIALS LOGIKA (CILKINIS PERĖJIMAS / CYCLE THROUGH MOBS) ===
+-- === AUTO TRIALS LOGIKA (OPTIMIZUOTA BE UI DEPENDENCY) ===
 local function startAutoTrials()
     trialsThread = task.spawn(function()
         while autoTrialsActive do
@@ -182,39 +176,44 @@ local function startAutoTrials()
                 local hrp = character and character:FindFirstChild("HumanoidRootPart")
 
                 if hrp then
-                    local mobList = {}
+                    local closestPart = nil
+                    local shortestDistance = math.huge
 
-                    -- Surandame visus Trial mobus
                     for _, descendant in ipairs(workspace:GetDescendants()) do
                         if descendant.Name == "Mobs" and descendant.Parent and descendant.Parent.Name:find("Trial") then
                             for _, mob in ipairs(descendant:GetChildren()) do
                                 local mobPart = mob:IsA("BasePart") and mob or mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChildOfClass("BasePart")
+                                
                                 if mobPart then
-                                    table.insert(mobList, mobPart)
+                                    local ui = mob:FindFirstChild("OresTopUI") or mob:FindFirstChildOfClass("BillboardGui") or mob:FindFirstChild("TopUI", true)
+                                    local bar = ui and ui:FindFirstChild("Bar", true)
+                                    local lbl = bar and bar:FindFirstChild("Health", true) or (ui and ui:FindFirstChild("Health", true))
+                                    local hpText = lbl and lbl.Text or ""
+                                    
+                                    -- Tikriname mirtį TIK JEI UI egzistuoja ir rodo mirtį. Jei UI neegzistuoja (MaxDistance) - mobas gyvas!
+                                    local isDead = hpText:find("Respawning") or hpText:find("^0/") or hpText == "0"
+
+                                    if not isDead then
+                                        local dist = (hrp.Position - mobPart.Position).Magnitude
+                                        if dist < shortestDistance then
+                                            shortestDistance = dist
+                                            closestPart = mobPart
+                                        end
+                                    end
                                 end
                             end
                         end
                     end
 
-                    -- Jei mobų yra, paeiliui teleportuojamės prie kiekvieno iš jų
-                    if #mobList > 0 then
-                        for _, mobPart in ipairs(mobList) do
-                            -- Tikriname ar žaidėjas neišjungė funkcijos arba neprasidėjo ritualas
-                            if not autoTrialsActive or isTriggeringRitual then break end
-                            
-                            if mobPart and mobPart.Parent then
-                                hrp.CFrame = mobPart.CFrame * CFrame.new(0, 0, 3)
-                                -- Laukimas tarp mobų (0.15s pakanka, kad Auto Attack atliktų smūgį)
-                                task.wait(0.15) 
-                            end
+                    if closestPart then
+                        local distToTarget = (hrp.Position - closestPart.Position).Magnitude
+                        if distToTarget > 3 then
+                            teleportToCFrame(closestPart.CFrame)
                         end
-                    else
-                        task.wait(0.2)
                     end
                 end
-            else
-                task.wait(0.5)
             end
+            RunService.RenderStepped:Wait()
         end
     end)
 end
@@ -394,7 +393,7 @@ AutomationTab:CreateButton({
 })
 
 AutomationTab:CreateToggle({
-   Name = "Auto Start Ritual (Loop Every 4m)",
+   Name = "Auto Start Ritual (Loop Every 3m)",
    CurrentValue = false,
    Flag = "AutoRitualToggle",
    Callback = function(Value)
