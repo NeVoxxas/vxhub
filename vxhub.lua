@@ -92,7 +92,7 @@ local function startAutoRitual()
     end)
 end
 
--- === AUTO TRIALS LOGIKA (TIKRI MOBAI) ===
+-- === AUTO TRIALS LOGIKA (IŠFILTRUOTI PICKUP IR ENTER OBJEKTAI) ===
 local function startAutoTrials()
     trialsThread = task.spawn(function()
         local debugSent = false
@@ -108,18 +108,28 @@ local function startAutoTrials()
                     -- Tikriname visus Trial kambarius
                     for _, descendant in ipairs(workspace:GetDescendants()) do
                         if descendant.Name:find("TrialRoom") or descendant.Name:find("Trial") then
-                            -- Ieškome mobų aplanko arba tiesioginių mobų modelių
                             for _, child in ipairs(descendant:GetDescendants()) do
+                                local nameLower = child.Name:lower()
                                 local isPlayer = child.Name == localPlayer.Name
                                 
-                                -- Tikriname ar tai mobas: turi UI/Health BAR arba Humanoid
-                                local hasUI = child:FindFirstChildOfClass("BillboardGui") or child:FindFirstChild("OresTopUI") or child:FindFirstChild("TopUI", true)
-                                local hasHumanoid = child:FindFirstChildOfClass("Humanoid")
-                                
-                                if (hasUI or hasHumanoid) and not isPlayer then
-                                    local part = child:IsA("BasePart") and child or child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildOfClass("BasePart")
-                                    if part then
-                                        table.insert(mobList, part)
+                                -- Ignoruojame portalus, įėjimus ir pickupus
+                                local isIgnored = nameLower:find("enter") 
+                                               or nameLower:find("pickup") 
+                                               or nameLower:find("portal") 
+                                               or nameLower:find("door") 
+                                               or nameLower:find("leave")
+                                               or nameLower:find("button")
+
+                                if not isIgnored and not isPlayer then
+                                    -- Tikriname ar tai mobas: turi UI/Health BAR arba Humanoid
+                                    local hasUI = child:FindFirstChildOfClass("BillboardGui") or child:FindFirstChild("OresTopUI") or child:FindFirstChild("TopUI", true)
+                                    local hasHumanoid = child:FindFirstChildOfClass("Humanoid")
+                                    
+                                    if hasUI or hasHumanoid then
+                                        local part = child:IsA("BasePart") and child or child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildOfClass("BasePart")
+                                        if part then
+                                            table.insert(mobList, part)
+                                        end
                                     end
                                 end
                             end
@@ -130,12 +140,12 @@ local function startAutoTrials()
                         debugSent = true
                         Rayfield:Notify({
                             Title = "Trials Debug",
-                            Content = "Atpažinta TIKRŲ Mobų: " .. #mobList,
+                            Content = "Tikrų Mobų (bez Pickup): " .. #mobList,
                             Duration = 5
                         })
                     end
 
-                    -- Teleportacija per atrinktus tikrus mobus
+                    -- Teleportacija per atrinktus mobus
                     if #mobList > 0 then
                         for _, mobPart in ipairs(mobList) do
                             if not autoTrialsActive or isTriggeringRitual then break end
