@@ -1,4 +1,5 @@
--- VX Hub | pataisyta versija
+-- VX Hub | Border Hotfix V4 (stable four-wall endpoint verification)
+-- V3 contour parity removed: rejects player even while inside Realm4.
 -- Pastaba: skriptas skirtas aplinkai, kurioje palaikomi loadstring ir game:HttpGet.
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -303,6 +304,8 @@ local controller = {
     MaxHeightDifference = 65,     -- reject far-above/below stars
     BorderInset = 2,             -- require target away from outer AABB edge
     RequireFourWalls = true,     -- fail closed unless rays see surrounding borders
+    DiagnosticsEnabled = true,
+    DiagnosticsInterval = 2,
     _destroyed = false,
     _connections = {},
 }
@@ -313,6 +316,9 @@ local firstTeleportTime = nil
 local ignoredUntil = setmetatable({}, {__mode = "k"})
 local lastScan, lastFollow = -math.huge, -math.huge
 local boundsCache, cacheTime, cacheFolder
+local lastDiagnosticsPrint, lastSuccessfulTP = -math.huge, os.clock()
+local lastDiagnostics = {}
+local lastStatus = "not started"
 
 local function rootPart()
     return getRoot()
@@ -385,23 +391,25 @@ local function enclosedByBorders(pos, b, params)
     return true
 end
 
-local function allowedPosition(pos, root, bounds, params)
-    if not bounds or not root then return false end
-    if not insideAABB(root.Position, bounds) or not insideAABB(pos, bounds) then return false end
-    if math.abs(pos.Y - root.Position.Y) > controller.MaxHeightDifference then return false end
-    if (pos - root.Position).Magnitude > controller.MaxTargetDistance then return false end
+local function positionStatus(pos, root, bounds, params)
+    if not root then return "NO_CHARACTER" end
+    if not bounds then return "NO_BORDERS" end
+    if not insideAABB(root.Position, bounds) then return "PLAYER_OUTSIDE_AABB" end
+    if not insideAABB(pos, bounds) then return "TARGET_OUTSIDE_AABB" end
+    if math.abs(pos.Y - root.Position.Y) > controller.MaxHeightDifference then return "HEIGHT" end
+    if (pos - root.Position).Magnitude > controller.MaxTargetDistance then return "DISTANCE" end
     if controller.RequireFourWalls then
-        if not enclosedByBorders(root.Position, bounds, params)
-            or not enclosedByBorders(pos, bounds, params) then
-            return false
-        end
+        if not enclosedByBorders(root.Position, bounds, params) then return "PLAYER_WALL_RAYS" end
+        if not enclosedByBorders(pos, bounds, params) then return "TARGET_WALL_RAYS" end
     end
-    -- Never TP through a border, even when both positions fall inside the global AABB.
-    local delta = pos - root.Position
-    if delta.Magnitude > 0.1 and Workspace:Raycast(root.Position, delta, params) then
-        return false
-    end
-    return true
+    -- Do not check the straight path to the target: teleportation is instant,
+    -- and an internal wall on that path does not mean the endpoint is outside.
+    -- Endpoint must still pass AABB, four surrounding border rays, and height/distance.
+    return nil -- endpoint permitted by conservative four-wall check
+end
+
+local function allowedPosition(pos, root, bounds, params)
+    return positionStatus(pos, root, bounds, params) == nil
 end
 
 local function targetPosition(gain, hitbox)
@@ -429,26 +437,75 @@ end
 
 local function nearestTarget(bounds, params)
     local folder, root = Workspace:FindFirstChild("ClientStars"), rootPart()
-    if not folder or not root then return nil end
+    local counts = {total = 0, valid = 0}
+    if not folder then
+        counts.NO_CLIENTSTARS = 1
+        return nil, counts
+    end
+    if not root then
+        counts.NO_CHARACTER = 1
+        return nil, counts
+    end
     local best, bestDist
+    local now = os.clock()
     for _, star in ipairs(folder:GetChildren()) do
+        counts.total += 1
         local item = resolve(star)
-        if item and (ignoredUntil[star] or 0) <= os.clock()
-            and allowedPosition(item.position + controller.Offset, root, bounds, params) then
+        local reason
+        if not item then
+            reason = "NO_GAIN_OR_HITBOX"
+        elseif (ignoredUntil[star] or 0) > now then
+            reason = "COOLDOWN"
+        else
+            reason = positionStatus(item.position + controller.Offset, root, bounds, params)
+        end
+        if reason then
+            counts[reason] = (counts[reason] or 0) + 1
+        else
+            counts.valid += 1
             local d = (root.Position - item.position).Magnitude
             if not bestDist or d < bestDist then
                 best, bestDist = item, d
             end
         end
     end
-    return best
+    return best, counts
+end
+
+local function printStarDiagnostics(force)
+    if not controller.DiagnosticsEnabled and not force then return end
+    local now = os.clock()
+    if not force and now - lastDiagnosticsPrint < controller.DiagnosticsInterval then return end
+    lastDiagnosticsPrint = now
+    local counts = lastDiagnostics
+    local reasons = {}
+    for reason, count in pairs(counts) do
+        if reason ~= "total" and reason ~= "valid" then
+            table.insert(reasons, reason .. "=" .. tostring(count))
+        end
+    end
+    table.sort(reasons)
+    print(string.format("[VX Hub Stars] Diagnostics | state=%s | active=%s | target=%s | total=%d valid=%d | %s | lastTP=%.1fs ago",
+        lastStatus, tostring(controller.Enabled),
+        activeTarget and activeTarget.star.Name or "none",
+        counts.total or 0, counts.valid or 0,
+        #reasons > 0 and table.concat(reasons, ", ") or "no rejects",
+        math.max(0, now - lastSuccessfulTP)))
 end
 
 local function update()
-    if not controller.Enabled or controller._destroyed or destroyed or isTriggeringRitual then return end
+    if controller._destroyed or destroyed or not controller.Enabled then return end
+    if isTriggeringRitual then
+        lastStatus = "paused: ritual"
+        printStarDiagnostics(false)
+        return
+    end
     local root, bounds = rootPart(), borderBounds()
     if not root or not bounds then
         activeTarget, firstTeleportTime = nil, nil
+        lastStatus = root and "blocked: borders missing" or "blocked: no character"
+        lastDiagnostics = root and {NO_BORDERS = 1} or {NO_CHARACTER = 1}
+        printStarDiagnostics(false)
         return -- fail closed when border geometry is unavailable
     end
     local params = makeParams(bounds.folder)
@@ -463,7 +520,8 @@ local function update()
     end
 
     if not activeTarget or not activeTarget.star.Parent or now - lastScan >= controller.ScanInterval then
-        local nextTarget = nearestTarget(bounds, params)
+        local nextTarget, counts = nearestTarget(bounds, params)
+        lastDiagnostics = counts
         if not activeTarget or not activeTarget.star.Parent then
             if not nextTarget or not activeTarget or nextTarget.star ~= activeTarget.star then
                 firstTeleportTime = nil
@@ -473,6 +531,7 @@ local function update()
         -- Keep the current star for the short pickup hold, even when
         -- the nearest-star ordering changes as the character moves.
         lastScan = now
+
         if activeTarget and activeTarget.star ~= printedTarget then
             printedTarget = activeTarget.star
             print("[StarAutoTP] Realm4 target:", activeTarget.star:GetFullName())
@@ -481,20 +540,29 @@ local function update()
 
     if now - lastFollow >= controller.FollowInterval then
         lastFollow = now
-        if not activeTarget then return end
+        if not activeTarget then
+            lastStatus = "searching: no eligible star"
+            printStarDiagnostics(false)
+            return
+        end
         local current = resolve(activeTarget.star)
         if not current then
+            lastStatus = "target disappeared"
             activeTarget, firstTeleportTime = nil, nil
             return
         end
         local destination = current.position + controller.Offset
         if not allowedPosition(destination, root, bounds, params) then
+            lastStatus = "blocked: target position outside safe area"
             activeTarget, firstTeleportTime = nil, nil
             return
         end
         root.CFrame = CFrame.new(destination)
+        lastStatus = "teleporting"
+        lastSuccessfulTP = now
         if not firstTeleportTime then firstTeleportTime = now end
     end
+    printStarDiagnostics(false) -- print even when a target is active
 end
 
 addConnection(RunService.Heartbeat:Connect(function()
@@ -509,15 +577,20 @@ function controller.Start()
     activeTarget, printedTarget, firstTeleportTime = nil, nil, nil
     ignoredUntil = setmetatable({}, {__mode = "k"})
     lastScan, lastFollow = -math.huge, -math.huge
+    lastDiagnosticsPrint, lastSuccessfulTP = -math.huge, os.clock()
+    lastDiagnostics = {}
+    lastStatus = "started"
     if not bordersFolder() then
         warn("[StarAutoTP] Borders nerastas: Workspace.MAPS.Realm4.Borders - teleportavimas blokuojamas")
     end
-    print("[StarAutoTP] ON - Realm4 borders protection")
+    print("[StarAutoTP] ON - Realm4 borders protection; periodic diagnostics enabled:", controller.DiagnosticsEnabled)
+    printStarDiagnostics(true)
 end
 function controller.Stop()
     controller.Enabled = false
     autoStarsActive = false
     activeTarget, firstTeleportTime = nil, nil
+    lastStatus = "stopped"
     print("[StarAutoTP] OFF")
 end
 function controller.Toggle()
@@ -544,7 +617,7 @@ local Window = Rayfield:CreateWindow({
    ConfigurationSaving = {
       Enabled = true,
       FolderName = "VXHubFolder",
-      FileName = "VX_Config"
+      FileName = "VX_Config_BorderHotfixV4"
    }
 })
 
@@ -638,7 +711,15 @@ MainTab:CreateButton({
            "Borders:", b and b.folder:GetFullName() or "MISSING",
            "PickupHold:", controller.PickupHoldTime,
            "RetryCooldown:", controller.TargetRetryCooldown)
+       printStarDiagnostics(true)
    end,
+})
+
+MainTab:CreateToggle({
+   Name = "Star Diagnostics (F9)",
+   CurrentValue = true,
+   Flag = "StarDiagnosticsFlag",
+   Callback = function(value) controller.DiagnosticsEnabled = value end,
 })
 
 -- === TAB 2: TRIALS ===
@@ -678,9 +759,11 @@ local RitualInput = AutomationTab:CreateInput({
    RemoveTextAfterFocusLost = false,
    Flag = "RitualPositionFlag",
    Callback = function(Text)
+       if type(Text) ~= "string" then return end
        local x, y, z = Text:match("([^,]+),%s*([^,]+),%s*([^,]+)")
        if x and y and z then
-           ritualPosition = CFrame.new(tonumber(x), tonumber(y), tonumber(z))
+           x, y, z = tonumber(x), tonumber(y), tonumber(z)
+           if x and y and z then ritualPosition = CFrame.new(x, y, z) end
        end
    end,
 })
@@ -693,7 +776,8 @@ AutomationTab:CreateButton({
            local pos = hrp.Position
            local posStr = string.format("%.1f, %.1f, %.1f", pos.X, pos.Y, pos.Z)
            
-           RitualInput:Set(posStr)
+           local ok, err = pcall(function() RitualInput:Set(posStr) end)
+           if not ok then warn("[VX Hub] RitualInput:Set failed: " .. tostring(err)) end
            ritualPosition = hrp.CFrame
            
            Rayfield:Notify({ Title = "Ritualo Vieta", Content = "Išsaugota pozicija: " .. posStr, Duration = 3 })
