@@ -6,12 +6,14 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TeleportService = game:GetService("TeleportService")
 local GuiService = game:GetService("GuiService")
 local VirtualUser = game:GetService("VirtualUser")
+local RunService = game:GetService("RunService")
 
 local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 local localPlayer = Players.LocalPlayer
 local mainRemote = ReplicatedStorage:WaitForChild("__Net"):WaitForChild("MainRemote")
 
 local autoTeleportActive = false
+local autoStarsActive = false
 local autoDepositActive = false
 local autoTrialsActive = false
 local autoRitualActive = false
@@ -149,7 +151,7 @@ end
 -- Vienu metu naudojamas vienas teleportavimo prioritetas:
 -- ritualas > pasirinktas Trial kambarys > paprastos rūdos / monstrai.
 local function trialHasPriority()
-    return autoTrialsActive and selectedTrialRoom ~= nil and selectedTrialRoom ~= ""
+    return not autoStarsActive and autoTrialsActive and selectedTrialRoom ~= nil and selectedTrialRoom ~= ""
 end
 
 local function teleportToCFrame(targetCFrame)
@@ -229,7 +231,7 @@ end
 
 local function startAutoTeleport()
     runLoop("teleport", function() return autoTeleportActive end, function()
-        if isTriggeringRitual or trialHasPriority() then return end
+        if isTriggeringRitual or autoStarsActive or trialHasPriority() then return end
         local root = getRoot()
         if not root then return end
         local content = Workspace:FindFirstChild("__GAME_CONTENT")
@@ -244,7 +246,7 @@ end
 
 local function startAutoTrials()
     runLoop("trials", function() return autoTrialsActive end, function()
-        if isTriggeringRitual or not trialHasPriority() then return end
+        if isTriggeringRitual or autoStarsActive or not trialHasPriority() then return end
         local root = getRoot()
         if not root then return end
         local closest = nearestTrialMob(root)
@@ -288,6 +290,248 @@ local function startAutoRitual()
         isTriggeringRitual = false
     end, 0.5)
 end
+
+-- === INTEGRUOTAS STAR AUTO TP (Realm4 QuickPickup) ===
+local controller = {
+    Enabled = false,
+    Offset = Vector3.new(0, 0, 0),
+    ScanInterval = 0.05,
+    FollowInterval = 0.03,
+    PickupHoldTime = 0.08,       -- time to let a pickup register before seeking the next star
+    TargetRetryCooldown = 0.5,    -- seconds before reconsidering the same still-visible star
+    MaxTargetDistance = 200,      -- radius around the player
+    MaxHeightDifference = 65,     -- reject far-above/below stars
+    BorderInset = 2,             -- require target away from outer AABB edge
+    RequireFourWalls = true,     -- fail closed unless rays see surrounding borders
+    _destroyed = false,
+    _connections = {},
+}
+
+
+local activeTarget, printedTarget
+local firstTeleportTime = nil
+local ignoredUntil = setmetatable({}, {__mode = "k"})
+local lastScan, lastFollow = -math.huge, -math.huge
+local boundsCache, cacheTime, cacheFolder
+
+local function rootPart()
+    return getRoot()
+end
+
+local function bordersFolder()
+    local maps = Workspace:FindFirstChild("MAPS")
+    local realm4 = maps and maps:FindFirstChild("Realm4")
+    return realm4 and realm4:FindFirstChild("Borders")
+end
+
+local function borderBounds()
+    local folder = bordersFolder()
+    if not folder then return nil end
+    if folder == cacheFolder and os.clock() - cacheTime < 2 then
+        return boundsCache
+    end
+    cacheFolder, cacheTime, boundsCache = folder, os.clock(), nil
+    local minX, maxX, minZ, maxZ = math.huge, -math.huge, math.huge, -math.huge
+    local count = 0
+    for _, item in ipairs(folder:GetDescendants()) do
+        if item:IsA("BasePart") then
+            -- AABB of all eight corners, correctly handling rotated wall parts
+            for ix = -1, 1, 2 do
+                for iy = -1, 1, 2 do
+                    for iz = -1, 1, 2 do
+                        local p = item.CFrame:PointToWorldSpace(Vector3.new(ix * item.Size.X / 2, iy * item.Size.Y / 2, iz * item.Size.Z / 2))
+                        minX, maxX = math.min(minX, p.X), math.max(maxX, p.X)
+                        minZ, maxZ = math.min(minZ, p.Z), math.max(maxZ, p.Z)
+                    end
+                end
+            end
+            count += 1
+        end
+    end
+    if count == 0 then return nil end
+    boundsCache = {minX = minX, maxX = maxX, minZ = minZ, maxZ = maxZ, folder = folder}
+    return boundsCache
+end
+
+local function insideAABB(p, bounds)
+    local inset = controller.BorderInset
+    return p.X > bounds.minX + inset and p.X < bounds.maxX - inset
+        and p.Z > bounds.minZ + inset and p.Z < bounds.maxZ - inset
+end
+
+local function makeParams(folder)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Include
+    params.FilterDescendantsInstances = {folder}
+    params.IgnoreWater = true
+    return params
+end
+
+local function enclosedByBorders(pos, b, params)
+    -- AABB alone does NOT prove a point is within irregular geometry.
+    -- Four horizontal raycasts must reach border parts from the candidate point.
+    -- This intentionally rejects uncertain positions (e.g. incomplete borders).
+    local search = math.max(b.maxX - b.minX, b.maxZ - b.minZ) + 20
+    local origin = Vector3.new(pos.X, pos.Y, pos.Z)
+    local directions = {
+        Vector3.new(search, 0, 0), Vector3.new(-search, 0, 0),
+        Vector3.new(0, 0, search), Vector3.new(0, 0, -search),
+    }
+    for _, direction in ipairs(directions) do
+        if not Workspace:Raycast(origin, direction, params) then
+            return false
+        end
+    end
+    return true
+end
+
+local function allowedPosition(pos, root, bounds, params)
+    if not bounds or not root then return false end
+    if not insideAABB(root.Position, bounds) or not insideAABB(pos, bounds) then return false end
+    if math.abs(pos.Y - root.Position.Y) > controller.MaxHeightDifference then return false end
+    if (pos - root.Position).Magnitude > controller.MaxTargetDistance then return false end
+    if controller.RequireFourWalls then
+        if not enclosedByBorders(root.Position, bounds, params)
+            or not enclosedByBorders(pos, bounds, params) then
+            return false
+        end
+    end
+    -- Never TP through a border, even when both positions fall inside the global AABB.
+    local delta = pos - root.Position
+    if delta.Magnitude > 0.1 and Workspace:Raycast(root.Position, delta, params) then
+        return false
+    end
+    return true
+end
+
+local function targetPosition(gain, hitbox)
+    if gain:IsA("Attachment") then return gain.WorldPosition end
+    if gain:IsA("BasePart") then return gain.Position end
+    local current = gain.Parent
+    while current and current ~= hitbox do
+        if current:IsA("Attachment") then return current.WorldPosition end
+        if current:IsA("BasePart") then return current.Position end
+        current = current.Parent
+    end
+    if hitbox:IsA("BasePart") then return hitbox.Position end
+    if hitbox:IsA("Attachment") then return hitbox.WorldPosition end
+    return nil
+end
+
+local function resolve(star)
+    local hitbox = star:FindFirstChild("Hitbox")
+    local ui = hitbox and hitbox:FindFirstChild("StarUI")
+    local gain = ui and ui:FindFirstChild("Gain")
+    local pos = gain and targetPosition(gain, hitbox)
+    if pos then return {star = star, gain = gain, position = pos} end
+    return nil
+end
+
+local function nearestTarget(bounds, params)
+    local folder, root = Workspace:FindFirstChild("ClientStars"), rootPart()
+    if not folder or not root then return nil end
+    local best, bestDist
+    for _, star in ipairs(folder:GetChildren()) do
+        local item = resolve(star)
+        if item and (ignoredUntil[star] or 0) <= os.clock()
+            and allowedPosition(item.position + controller.Offset, root, bounds, params) then
+            local d = (root.Position - item.position).Magnitude
+            if not bestDist or d < bestDist then
+                best, bestDist = item, d
+            end
+        end
+    end
+    return best
+end
+
+local function update()
+    if not controller.Enabled or controller._destroyed or destroyed or isTriggeringRitual then return end
+    local root, bounds = rootPart(), borderBounds()
+    if not root or not bounds then
+        activeTarget, firstTeleportTime = nil, nil
+        return -- fail closed when border geometry is unavailable
+    end
+    local params = makeParams(bounds.folder)
+    local now = os.clock()
+
+    -- The Gain GUI can remain visible during the pickup animation.
+    -- Do not keep following its hitbox forever. After a short hold, move on.
+    if activeTarget and firstTeleportTime and now - firstTeleportTime >= controller.PickupHoldTime then
+        ignoredUntil[activeTarget.star] = now + controller.TargetRetryCooldown
+        activeTarget, firstTeleportTime = nil, nil
+        lastScan = -math.huge
+    end
+
+    if not activeTarget or not activeTarget.star.Parent or now - lastScan >= controller.ScanInterval then
+        local nextTarget = nearestTarget(bounds, params)
+        if not activeTarget or not activeTarget.star.Parent then
+            if not nextTarget or not activeTarget or nextTarget.star ~= activeTarget.star then
+                firstTeleportTime = nil
+            end
+            activeTarget = nextTarget
+        end
+        -- Keep the current star for the short pickup hold, even when
+        -- the nearest-star ordering changes as the character moves.
+        lastScan = now
+        if activeTarget and activeTarget.star ~= printedTarget then
+            printedTarget = activeTarget.star
+            print("[StarAutoTP] Realm4 target:", activeTarget.star:GetFullName())
+        end
+    end
+
+    if now - lastFollow >= controller.FollowInterval then
+        lastFollow = now
+        if not activeTarget then return end
+        local current = resolve(activeTarget.star)
+        if not current then
+            activeTarget, firstTeleportTime = nil, nil
+            return
+        end
+        local destination = current.position + controller.Offset
+        if not allowedPosition(destination, root, bounds, params) then
+            activeTarget, firstTeleportTime = nil, nil
+            return
+        end
+        root.CFrame = CFrame.new(destination)
+        if not firstTeleportTime then firstTeleportTime = now end
+    end
+end
+
+addConnection(RunService.Heartbeat:Connect(function()
+    local ok, err = pcall(update)
+    if not ok then warn("[VX Hub Stars] " .. tostring(err)) end
+end))
+
+function controller.Start()
+    if controller._destroyed then return end
+    controller.Enabled = true
+    autoStarsActive = true
+    activeTarget, printedTarget, firstTeleportTime = nil, nil, nil
+    ignoredUntil = setmetatable({}, {__mode = "k"})
+    lastScan, lastFollow = -math.huge, -math.huge
+    if not bordersFolder() then
+        warn("[StarAutoTP] Borders nerastas: Workspace.MAPS.Realm4.Borders - teleportavimas blokuojamas")
+    end
+    print("[StarAutoTP] ON - Realm4 borders protection")
+end
+function controller.Stop()
+    controller.Enabled = false
+    autoStarsActive = false
+    activeTarget, firstTeleportTime = nil, nil
+    print("[StarAutoTP] OFF")
+end
+function controller.Toggle()
+    if controller.Enabled then controller.Stop() else controller.Start() end
+end
+function controller.Destroy()
+    controller.Enabled = false
+    autoStarsActive = false
+    controller._destroyed = true
+    for _, connection in ipairs(controller._connections) do connection:Disconnect() end
+
+    print("[StarAutoTP] Unloaded")
+end
+
 
 -- === RAYFIELD UI LANGAS ===
 local Window = Rayfield:CreateWindow({
@@ -355,6 +599,48 @@ MainTab:CreateButton({
    end,
 })
 
+
+MainTab:CreateSection("⭐ Stars - Realm4")
+MainTab:CreateToggle({
+   Name = "Auto TP Stars (Realm4)",
+   CurrentValue = false,
+   Flag = "AutoStarsRealm4Flag",
+   Callback = function(value)
+       if value then controller.Start() else controller.Stop() end
+   end,
+})
+MainTab:CreateSlider({
+   Name = "Star Pickup Hold (ms)",
+   Range = {30, 500}, Increment = 10, Suffix = " ms",
+   CurrentValue = 80,
+   Flag = "StarPickupHoldFlag",
+   Callback = function(value) controller.PickupHoldTime = value / 1000 end,
+})
+MainTab:CreateSlider({
+   Name = "Star Retry Cooldown (ms)",
+   Range = {100, 2000}, Increment = 50, Suffix = " ms",
+   CurrentValue = 500,
+   Flag = "StarCooldownFlag",
+   Callback = function(value) controller.TargetRetryCooldown = value / 1000 end,
+})
+MainTab:CreateSlider({
+   Name = "Star Max Distance",
+   Range = {50, 500}, Increment = 10, Suffix = " studs",
+   CurrentValue = 200,
+   Flag = "StarMaxDistanceFlag",
+   Callback = function(value) controller.MaxTargetDistance = value end,
+})
+MainTab:CreateButton({
+   Name = "Star Status / Borders Check (F9)",
+   Callback = function()
+       local b = borderBounds()
+       print("[VX Hub Stars] Active:", controller.Enabled,
+           "Borders:", b and b.folder:GetFullName() or "MISSING",
+           "PickupHold:", controller.PickupHoldTime,
+           "RetryCooldown:", controller.TargetRetryCooldown)
+   end,
+})
+
 -- === TAB 2: TRIALS ===
 TrialsTab:CreateSection("🏆 Auto Trials (Teleport Cleaver)")
 
@@ -379,7 +665,7 @@ TrialsTab:CreateToggle({
    Flag = "AutoTrialsToggleFlag",
    Callback = function(Value)
        autoTrialsActive = Value
-       if autoTrialsActive then startAutoTrials() end
+       startAutoTrials()
    end,
 })
 
@@ -421,7 +707,7 @@ AutomationTab:CreateToggle({
    Flag = "AutoRitualToggleFlag",
    Callback = function(Value)
        autoRitualActive = Value
-       if autoRitualActive then startAutoRitual() end
+       startAutoRitual()
    end,
 })
 
@@ -443,7 +729,7 @@ AutomationTab:CreateToggle({
    Flag = "AutoDepositToggleFlag",
    Callback = function(Value)
        autoDepositActive = Value
-       if autoDepositActive then startAutoDeposit() end
+       startAutoDeposit()
    end,
 })
 
@@ -484,12 +770,15 @@ SettingsTab:CreateSection("Sąsajos Valdymas")
 SettingsTab:CreateButton({
    Name = "Unload UI",
    Callback = function()
+       destroyed = true
        autoTeleportActive = false
        autoDepositActive = false
        autoTrialsActive = false
        autoRitualActive = false
        isTriggeringRitual = false
-       isRitualOnCooldown = false
+       controller.Destroy()
+       for key in pairs(generation) do generation[key] += 1 end
+       for _, connection in ipairs(connections) do connection:Disconnect() end
        Rayfield:Destroy()
    end,
 })
