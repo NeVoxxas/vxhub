@@ -1,328 +1,292 @@
-local PathfindingService = game:GetService("PathfindingService")
+-- VX Hub | pataisyta versija
+-- Pastaba: skriptas skirtas aplinkai, kurioje palaikomi loadstring ir game:HttpGet.
 local Players = game:GetService("Players")
-local workspace = game:GetService("Workspace")
+local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TeleportService = game:GetService("TeleportService")
 local GuiService = game:GetService("GuiService")
 local VirtualUser = game:GetService("VirtualUser")
-local RunService = game:GetService("RunService")
 
-local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 local localPlayer = Players.LocalPlayer
+local mainRemote = ReplicatedStorage:WaitForChild("__Net"):WaitForChild("MainRemote")
 
 local autoTeleportActive = false
 local autoDepositActive = false
 local autoTrialsActive = false
 local autoRitualActive = false
 local autoRejoinActive = true
-
 local isTriggeringRitual = false
-local isRitualOnCooldown = false
 local depositInterval = 10
 local ritualPosition = nil
 local selectedTrialRoom = nil
-
 local selectedOres = {}
 local selectedMobs = {}
+local destroyed = false
+local ritualCooldownUntil = 0
+local rejoinPending = false
+local generation = {teleport = 0, trials = 0, deposit = 0, ritual = 0}
+local connections = {}
 
-local tpThread = nil
-local depositThread = nil
-local trialsThread = nil
-local ritualThread = nil
+local function addConnection(connection)
+    table.insert(connections, connection)
+end
 
-local mainRemote = ReplicatedStorage:WaitForChild("__Net"):WaitForChild("MainRemote")
+addConnection(localPlayer.Idled:Connect(function()
+    if destroyed then return end
+    pcall(function()
+        local camera = Workspace.CurrentCamera
+        if not camera then return end
+        VirtualUser:Button2Down(Vector2.new(0, 0), camera.CFrame)
+        task.wait(1)
+        VirtualUser:Button2Up(Vector2.new(0, 0), camera.CFrame)
+    end)
+end))
 
--- === ANTI-AFK & AUTO-REJOIN ===
-localPlayer.Idled:Connect(function()
-    VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-    task.wait(1)
-    VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-end)
+addConnection(GuiService.ErrorMessageChanged:Connect(function(message)
+    if destroyed or not autoRejoinActive or rejoinPending or not message or message == "" then return end
+    rejoinPending = true
+    task.delay(2, function()
+        if destroyed or not autoRejoinActive then
+            rejoinPending = false
+            return
+        end
+        local ok = pcall(function()
+            TeleportService:Teleport(game.PlaceId, localPlayer)
+        end)
+        if not ok then
+            rejoinPending = false -- vėlesnis įvykis galės bandyti dar kartą
+        end
+    end)
+end))
 
-GuiService.ErrorMessageChanged:Connect(function()
-    if autoRejoinActive then
-        task.wait(2)
-        TeleportService:Teleport(game.PlaceId, localPlayer)
-    end
-end)
-
--- === SUFFIX REIKŠMIŲ KONVERTAVIMAS ===
 local SUFFIXES = {
     k = 1e3, m = 1e6, b = 1e9, t = 1e12, qd = 1e15, qn = 1e18,
     sx = 1e21, sp = 1e24, oc = 1e27, no = 1e30, dc = 1e33
 }
 
+-- nil reiškia nežinomą HP; nežinomas HP nėra automatiškai laikomas 0.
 local function parseHP(hpText)
-    if not hpText or hpText == "" or hpText:find("Respawning") then
-        return math.huge
+    if type(hpText) ~= "string" or hpText == "" then return nil end
+    if hpText:lower():find("respawning", 1, true) then return 0 end
+    local left = (hpText:split("/")[1] or hpText):lower():gsub("%s+", "")
+    local number, suffix = left:match("^([%d%.]+)(%a*)$")
+    local value = number and tonumber(number)
+    if not value then return nil end
+    if suffix ~= "" then
+        local multiplier = SUFFIXES[suffix]
+        if not multiplier then return nil end
+        value = value * multiplier
     end
+    return value
+end
 
-    local currentHp = hpText:split("/")[1] or hpText
-    currentHp = currentHp:gsub("%s+", ""):lower()
-
-    local num, suffix = currentHp:match("([%d%.]+)(%a*)")
-    num = tonumber(num) or math.huge
-
-    if suffix and SUFFIXES[suffix] then
-        return num * SUFFIXES[suffix]
+local function getHp(object)
+    local ui = object:FindFirstChild("OresTopUI")
+        or object:FindFirstChildOfClass("BillboardGui")
+        or object:FindFirstChild("TopUI", true)
+    local bar = ui and ui:FindFirstChild("Bar", true)
+    local label = (bar and bar:FindFirstChild("Health", true))
+        or (ui and ui:FindFirstChild("Health", true))
+    if label and (label:IsA("TextLabel") or label:IsA("TextButton") or label:IsA("TextBox")) then
+        return parseHP(label.Text)
     end
+    return nil
+end
 
-    return num
+local function isAlive(object)
+    local hp = getHp(object)
+    return hp == nil or hp > 0
+end
+
+local function getRoot()
+    local character = localPlayer.Character
+    return character and character:FindFirstChild("HumanoidRootPart")
+end
+
+local function getPart(object)
+    if object:IsA("BasePart") then return object end
+    if not object:IsA("Model") then return object:FindFirstChildWhichIsA("BasePart", true) end
+    return object.PrimaryPart
+        or object:FindFirstChild("HumanoidRootPart", true)
+        or object:FindFirstChild("Hitbox", true)
+        or object:FindFirstChildWhichIsA("BasePart", true)
 end
 
 local function getSortedItemsFromFolder(folderName)
-    local gameContent = workspace:FindFirstChild("__GAME_CONTENT")
-    local folder = gameContent and gameContent:FindFirstChild(folderName)
-
-    local itemList = {}
-    local seen = {}
-
+    local content = Workspace:FindFirstChild("__GAME_CONTENT")
+    local folder = content and content:FindFirstChild(folderName)
+    local items, seen, names = {}, {}, {}
     if folder then
-        for _, object in ipairs(folder:GetChildren()) do
-            if not seen[object.Name] then
-                seen[object.Name] = true
-                local ui = object:FindFirstChild("OresTopUI") or object:FindFirstChildOfClass("BillboardGui") or object:FindFirstChild("TopUI", true)
-                local bar = ui and ui:FindFirstChild("Bar", true)
-                local lbl = bar and bar:FindFirstChild("Health", true) or (ui and ui:FindFirstChild("Health", true))
-                local hpValue = lbl and parseHP(lbl.Text) or math.huge
-
-                table.insert(itemList, { name = object.Name, hp = hpValue })
+        for _, obj in ipairs(folder:GetChildren()) do
+            if not seen[obj.Name] then
+                seen[obj.Name] = true
+                table.insert(items, {name = obj.Name, hp = getHp(obj) or math.huge})
             end
         end
     end
-
-    table.sort(itemList, function(a, b) return a.hp < b.hp end)
-
-    local sortedNames = {}
-    for _, item in ipairs(itemList) do table.insert(sortedNames, item.name) end
-    if #sortedNames == 0 then sortedNames = {"Nėra " .. folderName} end
-
-    return sortedNames
+    table.sort(items, function(a, b)
+        if a.hp == b.hp then return a.name < b.name end
+        return a.hp < b.hp
+    end)
+    for _, item in ipairs(items) do table.insert(names, item.name) end
+    if #names == 0 then return {"Nėra " .. folderName} end
+    return names
 end
 
 local availableOres = getSortedItemsFromFolder("Ores")
 local availableMobs = getSortedItemsFromFolder("Mobs")
 
 local function isSelected(name, selectedList)
-    if type(selectedList) == "table" then
-        for _, v in ipairs(selectedList) do
-            if v == name then return true end
-        end
-    elseif type(selectedList) == "string" then
-        return selectedList == name
+    if type(selectedList) == "string" then return selectedList == name end
+    if type(selectedList) ~= "table" then return false end
+    for _, value in pairs(selectedList) do
+        if value == name then return true end
     end
     return false
 end
 
+-- Vienu metu naudojamas vienas teleportavimo prioritetas:
+-- ritualas > pasirinktas Trial kambarys > paprastos rūdos / monstrai.
+local function trialHasPriority()
+    return autoTrialsActive and selectedTrialRoom ~= nil and selectedTrialRoom ~= ""
+end
+
 local function teleportToCFrame(targetCFrame)
-    local character = localPlayer.Character
-    local hrp = character and character:FindFirstChild("HumanoidRootPart")
-    if hrp then
+    local hrp = getRoot()
+    if hrp and targetCFrame then
         hrp.CFrame = targetCFrame * CFrame.new(0, 0, 3)
     end
 end
 
--- === AUTO RITUAL LOGIKA ===
-local function startAutoRitual()
-    task.spawn(function()
-        while autoRitualActive do
-            if not isRitualOnCooldown then
-                local character = localPlayer.Character
-                local hrp = character and character:FindFirstChild("HumanoidRootPart")
-
-                if hrp then
-                    local targetCFrame = ritualPosition or hrp.CFrame
-
-                    isTriggeringRitual = true
-                    isRitualOnCooldown = true
-
-                    hrp.CFrame = targetCFrame
-                    task.wait(1.5)
-
-                    pcall(function()
-                        mainRemote:FireServer("StartRitual")
-                    end)
-
-                    Rayfield:Notify({
-                        Title = "Ritualas Aktyvuotas!",
-                        Content = "StartRitual paleistas. Auto TP grąžintas!",
-                        Duration = 3
-                    })
-
-                    task.wait(1.0)
-                    isTriggeringRitual = false
-
-                    task.wait(177.5)
-                    isRitualOnCooldown = false
+local function chooseNearestFromFolders(folderSpecs, root)
+    local bestPart, bestDistance = nil, math.huge
+    for _, spec in ipairs(folderSpecs) do
+        local folder, names = spec[1], spec[2]
+        if folder then
+            for _, obj in ipairs(folder:GetChildren()) do
+                if isSelected(obj.Name, names) and isAlive(obj) then
+                    local part = getPart(obj)
+                    if part then
+                        local dist = (root.Position - part.Position).Magnitude
+                        if dist < bestDistance then
+                            bestDistance, bestPart = dist, part
+                        end
+                    end
                 end
             end
-            task.wait(1)
         end
-    end)
+    end
+    return bestPart
 end
 
--- === AUTO TRIALS LOGIKA (GRIEŽTAS PASIRINKTO KAMBARIO IR GYVŲ MOBŲ TIKRINIMAS) ===
-local function startAutoTrials()
-    task.spawn(function()
-        while autoTrialsActive do
-            if not isTriggeringRitual then
-                local character = localPlayer.Character
-                local hrp = character and character:FindFirstChild("HumanoidRootPart")
-
-                if hrp and selectedTrialRoom then
-                    local closestMobPart = nil
-                    local shortestDistance = math.huge
-
-                    local gameContent = workspace:FindFirstChild("__GAME_CONTENT")
-                    local contents = gameContent and gameContent:FindFirstChild("Contents")
-                    
-                    if contents then
-                        for _, worldObj in ipairs(contents:GetChildren()) do
-                            local trialsFolder = worldObj:FindFirstChild("Trials")
-                            if trialsFolder then
-                                for _, room in ipairs(trialsFolder:GetChildren()) do
-                                    -- Tikriname tik žaidėjo pasirinktą kambarį
-                                    if room.Name == selectedTrialRoom then
-                                        local mobsFolder = room:FindFirstChild("Mobs")
-                                        if mobsFolder then
-                                            for _, mob in ipairs(mobsFolder:GetChildren()) do
-                                                if mob.Name ~= localPlayer.Name then
-                                                    -- Gyvybių (HP) tikrinimas
-                                                    local ui = mob:FindFirstChild("OresTopUI") or mob:FindFirstChildOfClass("BillboardGui") or mob:FindFirstChild("TopUI", true)
-                                                    local bar = ui and ui:FindFirstChild("Bar", true)
-                                                    local lbl = bar and bar:FindFirstChild("Health", true) or (ui and ui:FindFirstChild("Health", true))
-                                                    
-                                                    local isDead = false
-
-                                                    if lbl and lbl.Text then
-                                                        local currentHpStr = lbl.Text:split("/")[1]
-                                                        if currentHpStr then
-                                                            local cleanHp = currentHpStr:gsub("%s+", ""):gsub("%a+", "")
-                                                            if cleanHp == "0" or lbl.Text:find("Respawning") then
-                                                                isDead = true
-                                                            end
-                                                        end
-                                                    end
-
-                                                    -- Imame TIK gyvus mobus
-                                                    if not isDead then
-                                                        local part = mob:IsA("BasePart") and mob 
-                                                            or mob.PrimaryPart 
-                                                            or mob:FindFirstChild("HumanoidRootPart") 
-                                                            or mob:FindFirstChild("Hitbox")
-                                                            or mob:FindFirstChildWhichIsA("BasePart", true)
-                                                        
-                                                        if part then
-                                                            local dist = (hrp.Position - part.Position).Magnitude
-                                                            if dist < shortestDistance then
-                                                                shortestDistance = dist
-                                                                closestMobPart = part
-                                                            end
-                                                        end
-                                                    end
-                                                end
-                                            end
-                                        end
+local function nearestTrialMob(root)
+    local content = Workspace:FindFirstChild("__GAME_CONTENT")
+    local contents = content and content:FindFirstChild("Contents")
+    if not contents then return nil end
+    local bestPart, bestDistance = nil, math.huge
+    for _, worldObj in ipairs(contents:GetChildren()) do
+        local trials = worldObj:FindFirstChild("Trials")
+        if trials then
+            for _, room in ipairs(trials:GetChildren()) do
+                if room.Name == selectedTrialRoom then
+                    local mobs = room:FindFirstChild("Mobs")
+                    if mobs then
+                        for _, mob in ipairs(mobs:GetChildren()) do
+                            if mob.Name ~= localPlayer.Name and isAlive(mob) then
+                                local part = getPart(mob)
+                                if part then
+                                    local dist = (root.Position - part.Position).Magnitude
+                                    if dist < bestDistance then
+                                        bestDistance, bestPart = dist, part
                                     end
                                 end
                             end
                         end
                     end
-
-                    if closestMobPart then
-                        hrp.CFrame = closestMobPart.CFrame * CFrame.new(0, 0, 3)
-                        task.wait(0.04)
-                    else
-                        task.wait(0.08)
-                    end
-                else
-                    task.wait(0.3)
                 end
-            else
-                task.wait(0.5)
             end
-            task.wait(0.01)
         end
-    end)
+    end
+    return bestPart
 end
 
--- === AUTO DEPOSIT LOGIKA ===
-local function startAutoDeposit()
+-- Kiekvienas perjungimas pakeičia epochą. Senas ciklas neatsinaujina,
+-- net jei vartotojas labai greitai išjungė ir įjungė jungiklį.
+local function runLoop(key, isEnabled, step, delaySeconds)
+    generation[key] = generation[key] + 1
+    local thisGeneration = generation[key]
+    if not isEnabled() then return end
     task.spawn(function()
-        while autoDepositActive do
-            pcall(function()
-                mainRemote:FireServer("DepositMeat")
-            end)
-            task.wait(depositInterval)
+        while not destroyed and generation[key] == thisGeneration and isEnabled() do
+            local ok, err = pcall(step)
+            if not ok then warn("[VX Hub] " .. key .. ": " .. tostring(err)) end
+            local delay = type(delaySeconds) == "function" and delaySeconds() or delaySeconds
+            task.wait(math.max(delay or 0.1, 0.05))
         end
     end)
 end
 
--- === AUTO TELEPORT LOGIKA ===
 local function startAutoTeleport()
-    task.spawn(function()
-        while autoTeleportActive do
-            if not isTriggeringRitual then
-                local character = localPlayer.Character
-                local hrp = character and character:FindFirstChild("HumanoidRootPart")
+    runLoop("teleport", function() return autoTeleportActive end, function()
+        if isTriggeringRitual or trialHasPriority() then return end
+        local root = getRoot()
+        if not root then return end
+        local content = Workspace:FindFirstChild("__GAME_CONTENT")
+        if not content then return end
+        local closest = chooseNearestFromFolders({
+            {content:FindFirstChild("Ores"), selectedOres},
+            {content:FindFirstChild("Mobs"), selectedMobs}
+        }, root)
+        if closest then teleportToCFrame(closest.CFrame) end
+    end, 0.2)
+end
 
-                if hrp then
-                    local gameContent = workspace:FindFirstChild("__GAME_CONTENT")
-                    local oresFolder = gameContent and gameContent:FindFirstChild("Ores")
-                    local mobsFolder = gameContent and gameContent:FindFirstChild("Mobs")
+local function startAutoTrials()
+    runLoop("trials", function() return autoTrialsActive end, function()
+        if isTriggeringRitual or not trialHasPriority() then return end
+        local root = getRoot()
+        if not root then return end
+        local closest = nearestTrialMob(root)
+        if closest then teleportToCFrame(closest.CFrame) end
+    end, 0.08)
+end
 
-                    local closestObject = nil
-                    local shortestDistance = math.huge
+local function startAutoDeposit()
+    runLoop("deposit", function() return autoDepositActive end, function()
+        mainRemote:FireServer("DepositMeat")
+    end, function() return depositInterval end)
+end
 
-                    if oresFolder then
-                        for _, object in ipairs(oresFolder:GetChildren()) do
-                            if isSelected(object.Name, selectedOres) then
-                                local ui = object:FindFirstChild("OresTopUI") or object:FindFirstChildOfClass("BillboardGui") or object:FindFirstChild("TopUI", true)
-                                local bar = ui and ui:FindFirstChild("Bar", true)
-                                local lbl = bar and bar:FindFirstChild("Health", true) or (ui and ui:FindFirstChild("Health", true))
-
-                                if not (lbl and lbl.Text:find("Respawning")) then
-                                    local objPos = object:IsA("BasePart") and object.Position or object:GetPivot().Position
-                                    local dist = (hrp.Position - objPos).Magnitude
-
-                                    if dist < shortestDistance then
-                                        shortestDistance = dist
-                                        closestObject = object
-                                    end
-                                end
-                            end
-                        end
-                    end
-
-                    if mobsFolder then
-                        for _, object in ipairs(mobsFolder:GetChildren()) do
-                            if isSelected(object.Name, selectedMobs) then
-                                local ui = object:FindFirstChild("OresTopUI") or object:FindFirstChildOfClass("BillboardGui") or object:FindFirstChild("TopUI", true)
-                                local bar = ui and ui:FindFirstChild("Bar", true)
-                                local lbl = bar and bar:FindFirstChild("Health", true) or (ui and ui:FindFirstChild("Health", true))
-
-                                if not (lbl and lbl.Text:find("Respawning")) then
-                                    local objPos = object:IsA("BasePart") and object.Position or object:GetPivot().Position
-                                    local dist = (hrp.Position - objPos).Magnitude
-
-                                    if dist < shortestDistance then
-                                        shortestDistance = dist
-                                        closestObject = object
-                                    end
-                                end
-                            end
-                        end
-                    end
-
-                    if closestObject then
-                        local targetCFrame = closestObject:IsA("BasePart") and closestObject.CFrame or closestObject:GetPivot()
-                        teleportToCFrame(targetCFrame)
-                    end
-                end
-            end
-            task.wait(0.2)
+local function startAutoRitual()
+    runLoop("ritual", function() return autoRitualActive end, function()
+        if os.clock() < ritualCooldownUntil or isTriggeringRitual then return end
+        local root = getRoot()
+        if not root then return end
+        isTriggeringRitual = true
+        local currentGeneration = generation.ritual
+        local target = ritualPosition or root.CFrame
+        local sent = false
+        local ok, err = pcall(function()
+            root.CFrame = target
+            task.wait(1.5)
+            if destroyed or not autoRitualActive or generation.ritual ~= currentGeneration then return end
+            mainRemote:FireServer("StartRitual")
+            sent = true
+        end)
+        if ok and sent and autoRitualActive and not destroyed then
+            ritualCooldownUntil = os.clock() + 178.5
+            Rayfield:Notify({
+                Title = "Ritualo užklausa išsiųsta",
+                Content = "StartRitual išsiųstas serveriui (patvirtinimas netikrinamas).",
+                Duration = 3
+            })
+        elseif not ok then
+            warn("[VX Hub] ritual: " .. tostring(err))
+            ritualCooldownUntil = os.clock() + 5 -- trumpa pauzė prieš pakartotinį bandymą
         end
-    end)
+        isTriggeringRitual = false
+    end, 0.5)
 end
 
 -- === RAYFIELD UI LANGAS ===
@@ -376,7 +340,7 @@ MainTab:CreateToggle({
    Flag = "AutoTPToggleFlag",
    Callback = function(Value)
        autoTeleportActive = Value
-       if autoTeleportActive then startAutoTeleport() end
+       startAutoTeleport()
    end,
 })
 
