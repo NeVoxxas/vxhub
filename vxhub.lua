@@ -1,5 +1,5 @@
--- VX Hub | Border Hotfix V4 (stable four-wall endpoint verification)
--- V3 contour parity removed: rejects player even while inside Realm4.
+-- VX Hub | V5 (lifecycle cleanup, cached raycast params, star distance fix)
+-- Based on V4: preserves four-wall endpoint verification and pickup-hold behavior.
 -- Pastaba: skriptas skirtas aplinkai, kurioje palaikomi loadstring ir game:HttpGet.
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -365,11 +365,16 @@ local function insideAABB(p, bounds)
         and p.Z > bounds.minZ + inset and p.Z < bounds.maxZ - inset
 end
 
+local cachedRaycastFolder, cachedRaycastParams
 local function makeParams(folder)
+    if cachedRaycastFolder == folder and cachedRaycastParams then
+        return cachedRaycastParams
+    end
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Include
     params.FilterDescendantsInstances = {folder}
     params.IgnoreWater = true
+    cachedRaycastFolder, cachedRaycastParams = folder, params
     return params
 end
 
@@ -463,7 +468,8 @@ local function nearestTarget(bounds, params)
             counts[reason] = (counts[reason] or 0) + 1
         else
             counts.valid += 1
-            local d = (root.Position - item.position).Magnitude
+            local destination = item.position + controller.Offset
+            local d = (root.Position - destination).Magnitude
             if not bestDist or d < bestDist then
                 best, bestDist = item, d
             end
@@ -565,10 +571,11 @@ local function update()
     printStarDiagnostics(false) -- print even when a target is active
 end
 
-addConnection(RunService.Heartbeat:Connect(function()
+local starHeartbeatConnection = RunService.Heartbeat:Connect(function()
     local ok, err = pcall(update)
     if not ok then warn("[VX Hub Stars] " .. tostring(err)) end
-end))
+end)
+table.insert(controller._connections, starHeartbeatConnection)
 
 function controller.Start()
     if controller._destroyed then return end
@@ -597,18 +604,23 @@ function controller.Toggle()
     if controller.Enabled then controller.Stop() else controller.Start() end
 end
 function controller.Destroy()
+    if controller._destroyed then return end
     controller.Enabled = false
     autoStarsActive = false
     controller._destroyed = true
-    for _, connection in ipairs(controller._connections) do connection:Disconnect() end
-
+    for _, connection in ipairs(controller._connections) do
+        pcall(function() connection:Disconnect() end)
+    end
+    table.clear(controller._connections)
+    activeTarget, printedTarget, firstTeleportTime = nil, nil, nil
+    cachedRaycastFolder, cachedRaycastParams = nil, nil
     print("[StarAutoTP] Unloaded")
 end
 
 
 -- === RAYFIELD UI LANGAS ===
 local Window = Rayfield:CreateWindow({
-   Name = "VX Hub",
+   Name = "VX Hub V5",
    Icon = 0,
    LoadingTitle = "VX Hub Kraunasi...",
    LoadingSubtitle = "by Sirius Rayfield",
@@ -617,7 +629,7 @@ local Window = Rayfield:CreateWindow({
    ConfigurationSaving = {
       Enabled = true,
       FolderName = "VXHubFolder",
-      FileName = "VX_Config_BorderHotfixV4"
+      FileName = "VX_Config_V5"
    }
 })
 
@@ -854,11 +866,15 @@ SettingsTab:CreateSection("Sąsajos Valdymas")
 SettingsTab:CreateButton({
    Name = "Unload UI",
    Callback = function()
+       if destroyed then return end
        destroyed = true
        autoTeleportActive = false
+       autoStarsActive = false
        autoDepositActive = false
        autoTrialsActive = false
        autoRitualActive = false
+       autoRejoinActive = false
+       rejoinPending = false
        isTriggeringRitual = false
        controller.Destroy()
        for key in pairs(generation) do generation[key] += 1 end
